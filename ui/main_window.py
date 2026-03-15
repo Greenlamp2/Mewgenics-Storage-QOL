@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton,
 )
 
+from parse.item import Item
 from utils.loaders import load_inventories, load_gold
 from utils.savers import save_inventories, save_gold
 
@@ -136,11 +137,28 @@ class MainWindow(QMainWindow):
         )
         self.sell_btn.clicked.connect(self._sell_item)
 
+        self.duplicate_btn = QPushButton("⧉ Duplicate")
+        self.duplicate_btn.setVisible(False)
+        self.duplicate_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
+            " background: #1976d2; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #1565c0; }"
+            "QPushButton:pressed { background: #0d47a1; }"
+        )
+        self.duplicate_btn.clicked.connect(self._duplicate_item)
+
+        action_row = QWidget()
+        action_layout = QHBoxLayout(action_row)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(6)
+        action_layout.addWidget(self.sell_btn)
+        action_layout.addWidget(self.duplicate_btn)
+
         detail_layout.addWidget(icon_wrapper)
         detail_layout.addWidget(self.detail_name)
         detail_layout.addWidget(self.detail_info)
         detail_layout.addSpacing(8)
-        detail_layout.addWidget(self.sell_btn)
+        detail_layout.addWidget(action_row)
         detail_layout.addStretch()
 
         splitter.addWidget(left_widget)
@@ -203,6 +221,7 @@ class MainWindow(QMainWindow):
         self._clear_grid()
         self._clear_detail()
         self.sell_btn.setVisible(False)
+        self.duplicate_btn.setVisible(False)
         self._populate(self.inv_items[current_tab])
 
     # ------------------------------------------------------------------
@@ -233,6 +252,7 @@ class MainWindow(QMainWindow):
         self._clear_grid()
         self._clear_detail()
         self.sell_btn.setVisible(False)
+        self.duplicate_btn.setVisible(False)
         self._populate(self.inv_items[self._selected_inv_key])
 
     # ------------------------------------------------------------------
@@ -241,8 +261,12 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index: int):
         label = self.tab_bar.tabText(index)
+        self._selected_item_idx = None
+        self._selected_inv_key = None
         self._clear_grid()
         self._clear_detail()
+        self.sell_btn.setVisible(False)
+        self.duplicate_btn.setVisible(False)
         self._populate(self.inv_items[label])
 
     def _clear_grid(self):
@@ -343,3 +367,28 @@ class MainWindow(QMainWindow):
 
         self.sell_btn.setText(f"Sell for {price} gold")
         self.sell_btn.setVisible(True)
+        self.duplicate_btn.setVisible(True)
+
+    # ------------------------------------------------------------------
+    # Duplicate
+    # ------------------------------------------------------------------
+
+    def _duplicate_item(self):
+        if self._selected_item_idx is None or self._selected_inv_key is None:
+            return
+
+        inv_key = TAB_TO_INV_KEY[self._selected_inv_key]
+        inventory = self.inventories[inv_key]
+
+        original_raw = inventory.raws[self._selected_item_idx]
+        new_seq_id = max((r.get("seqId", 0) for r in inventory.raws), default=0) + 1
+        new_raw = {**original_raw, "seqId": new_seq_id}
+
+        inventory.raws.append(new_raw)
+        inventory.items.append(Item(new_raw))
+        inventory.count += 1
+
+        save_inventories(self.sav_path, self.inventories)
+
+        self._clear_grid()
+        self._populate(self.inv_items[self._selected_inv_key])
