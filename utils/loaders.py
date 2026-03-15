@@ -11,9 +11,21 @@ def load_inventories(path):
     storage = Inventory(storageBlob)
     backpack = Inventory(backpackBlob)
     trash = Inventory(trashBlob)
+    conn.close()
 
     return {
         'backpack': backpack,
         'storage': storage,
         'trash': trash,
     }
+
+def load_gold(path):
+    conn = sqlite3.connect(path)
+    row = conn.execute("SELECT key, data FROM properties WHERE key='house_gold'").fetchone()
+    conn.close()
+    if row is None:
+        return 0
+    try:
+        return int(row[1])
+    except (TypeError, ValueError):
+        return 0

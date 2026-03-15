@@ -23,6 +23,13 @@ quests_filenames = [
     'beanies_quest_items.json', 'legacy_quest_items.json'
 ]
 
+prices = {
+    "common": "14",
+    "uncommon": "20",
+    "rare": "40",
+    "very_rare": "80"
+}
+
 class ItemCatalog:
     def __init__(self):
         self.categories = []
@@ -77,6 +84,9 @@ class ItemCatalog:
     def solve_icon_name(self, name):
         solved_name = name.replace('_DESC', '').replace('_FIXED', '').replace('ITEM_', '')
         return 'ITEM_' + format_item_name(solved_name) + '.svg'
+
+    def get_price(self, rarity):
+        return prices.get(rarity, "0")
 
 
 item_catalog = ItemCatalog()

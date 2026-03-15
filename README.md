@@ -1,4 +1,4 @@
-# Mewgenics Save Manager
+# Mewgenics Storage QOL
 
 ## Requirements
 
