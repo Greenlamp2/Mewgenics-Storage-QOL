@@ -37,19 +37,19 @@ def save_inventories(path, inventories):
     storage = inventories.get('storage')
     backpack = inventories.get('backpack')
     trash = inventories.get('trash')
-    storageBlob = build_inventory_blob(storage.items)
+    storageBlob = build_inventory_blob(storage.raws)
     conn.execute(
         "UPDATE files SET data=? WHERE key='inventory_storage'",
         (storageBlob,)
     )
 
-    backpackBlob = build_inventory_blob(backpack.items)
+    backpackBlob = build_inventory_blob(backpack.raws)
     conn.execute(
         "UPDATE files SET data=? WHERE key='inventory_backpack'",
         (backpackBlob,)
     )
 
-    trashBlob = build_inventory_blob(trash.items)
+    trashBlob = build_inventory_blob(trash.raws)
     conn.execute(
         "UPDATE files SET data=? WHERE key='inventory_trash'",
         (trashBlob,)

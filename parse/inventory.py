@@ -1,8 +1,13 @@
+from parse.item import Item
 from utils.readers import BinaryReader
 
 class Inventory:
     def __init__(self, blob):
+        self.raws = []
         self.items = []
+        self.parse(blob)
+
+    def parse(self, blob):
         reader = BinaryReader(blob)
         self.count = reader.u32()
         if self.count == 0:
@@ -24,7 +29,8 @@ class Inventory:
                 sep_val = reader.u32()
             else:
                 sep_flag = reader.u8()
-            self.items.append({
+
+            item = {
                 'name': name,
                 'subname': subname,
                 'charges': charges,
@@ -33,8 +39,10 @@ class Inventory:
                 'seqId': seqId,
                 'tailByte': tailByte,
                 'sep_flag': sep_flag
-            })
+            }
+            self.raws.append(item)
+            self.items.append(Item(item))
 
     def addItem(self, item):
-        self.items.append(item)
+        self.raws.append(item)
         self.count += 1

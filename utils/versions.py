@@ -31,5 +31,5 @@ def is_app_up_most_to_date(path):
     conn = sqlite3.connect(path)
     storageBlob = conn.execute("SELECT key, data FROM files WHERE key=\'inventory_storage\'").fetchone()[1]
     storage = Inventory(storageBlob)
-    blob = build_inventory_blob(storage.items)
+    blob = build_inventory_blob(storage.raws)
     return compare_blob(storageBlob, blob)
