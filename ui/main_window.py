@@ -35,6 +35,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Mewgenics Storage QOL")
         self.resize(960, 640)
 
+        self.sav_path = sav_path
         inventories = load_inventories(sav_path)
         self.golds = load_gold(sav_path)
         self.inv_items = {
@@ -131,7 +132,19 @@ class MainWindow(QMainWindow):
             "QStatusBar { background: #f5e9c8; border-top: 1px solid #d4b97a; }"
         )
 
+        # Reload button (left side)
+        reload_btn = QToolButton()
+        reload_btn.setText("↺ Reload")
+        reload_btn.setStyleSheet(
+            "QToolButton { font-size: 13px; font-weight: bold; padding: 2px 10px;"
+            " border: 1px solid #d4b97a; border-radius: 4px; background: #eedfa0; }"
+            "QToolButton:hover { background: #e8d080; }"
+            "QToolButton:pressed { background: #d4b97a; }"
+        )
+        reload_btn.clicked.connect(self._reload)
+        bar.addWidget(reload_btn)
 
+        # Gold display (right side)
         gold_widget = QWidget()
         gold_layout = QHBoxLayout(gold_widget)
         gold_layout.setContentsMargins(8, 2, 12, 2)
@@ -143,13 +156,33 @@ class MainWindow(QMainWindow):
             icon_lbl.setPixmap(pixmap.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         gold_layout.addWidget(icon_lbl)
 
-        text_lbl = QLabel(f"{self.golds:,} gold")
-        text_lbl.setStyleSheet(
+        self.gold_text_label = QLabel(f"{self.golds:,} gold")
+        self.gold_text_label.setStyleSheet(
             "QLabel { color: #7a5000; font-size: 14px; font-weight: bold; }"
         )
-        gold_layout.addWidget(text_lbl)
+        gold_layout.addWidget(self.gold_text_label)
 
         bar.addPermanentWidget(gold_widget)
+
+    # ------------------------------------------------------------------
+    # Reload
+    # ------------------------------------------------------------------
+
+    def _reload(self):
+        current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
+
+        inventories = load_inventories(self.sav_path)
+        self.golds = load_gold(self.sav_path)
+        self.inv_items = {
+            "Storage": inventories["storage"].items,
+            "Trash":   inventories["trash"].items,
+        }
+
+        self.gold_text_label.setText(f"{self.golds:,} gold")
+
+        self._clear_grid()
+        self._clear_detail()
+        self._populate(self.inv_items[current_tab])
 
     # ------------------------------------------------------------------
     # Tab switching
