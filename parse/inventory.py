@@ -5,9 +5,12 @@ class Inventory:
     def __init__(self, blob):
         self.raws = []
         self.items = []
+        self.count = 0
         self.parse(blob)
 
     def parse(self, blob):
+        if not blob:
+            return
         reader = BinaryReader(blob)
         self.count = reader.u32()
         if self.count == 0:

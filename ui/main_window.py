@@ -22,6 +22,19 @@ GRID_COLS = 7
 ICON_SIZE = 56
 EXCLUDED_RARITIES = {"sidequest", "quest"}
 
+RARITY_COLORS = {
+    "common":    "#aaaaaa",
+    "uncommon":  "#55aa55",
+    "rare":      "#5588ff",
+    "very_rare": "#ffaa00",
+}
+RARITY_BG = {
+    "common":    "rgba(150, 150, 150, 0.30)",
+    "uncommon":  "rgba(85,  170,  85, 0.30)",
+    "rare":      "rgba(85,  136, 255, 0.30)",
+    "very_rare": "rgba(255, 170,   0, 0.35)",
+}
+
 
 def svg_to_pixmap(svg_path: str, size: int) -> QPixmap:
     pixmap = QPixmap(size, size)
@@ -306,10 +319,12 @@ class MainWindow(QMainWindow):
             btn.setFixedSize(ICON_SIZE + 8, ICON_SIZE + 8)
             btn.setToolTip(tooltip)
             btn.setCheckable(True)
+            rarity = details.get("rarity", "")
+            bg = RARITY_BG.get(rarity, "rgba(80, 80, 80, 0.20)")
             btn.setStyleSheet(
-                "QToolButton { border: 2px solid transparent; border-radius: 4px; }"
-                "QToolButton:checked { border: 2px solid #4a9eff; background: rgba(74,158,255,0.15); }"
-                "QToolButton:hover { background: rgba(255,255,255,0.08); }"
+                f"QToolButton {{ border: 2px solid transparent; border-radius: 4px; background: {bg}; }}"
+                "QToolButton:checked { border: 2px solid #4a9eff; }"
+                "QToolButton:hover { border: 2px solid rgba(255,255,255,0.4); }"
             )
             btn.clicked.connect(lambda checked, i=idx, b=btn, it=items: self._on_select(i, b, it))
 
@@ -341,12 +356,7 @@ class MainWindow(QMainWindow):
         lines = []
         rarity = details.get("rarity")
         if rarity:
-            color = {
-                "common": "#aaaaaa",
-                "uncommon": "#55aa55",
-                "rare": "#5588ff",
-                "legendary": "#ffaa00",
-            }.get(rarity, "#cccccc")
+            color = RARITY_COLORS.get(rarity, "#cccccc")
             lines.append(f'<b>Rarity:</b> <span style="color:{color}">{rarity.capitalize()}</span>')
 
         cat = item.category or ("quest" if item.is_quest_item else "—")

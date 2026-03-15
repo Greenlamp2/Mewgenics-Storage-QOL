@@ -3,11 +3,15 @@ import sqlite3
 from parse.inventory import Inventory
 
 
+def _fetch_blob(conn, key):
+    row = conn.execute("SELECT data FROM files WHERE key=?", (key,)).fetchone()
+    return row[0] if row else None
+
 def load_inventories(path):
     conn = sqlite3.connect(path)
-    backpackBlob = conn.execute("SELECT key, data FROM files WHERE key=\'inventory_backpack\'").fetchone()[1]
-    storageBlob = conn.execute("SELECT key, data FROM files WHERE key=\'inventory_storage\'").fetchone()[1]
-    trashBlob = conn.execute("SELECT key, data FROM files WHERE key=\'inventory_trash\'").fetchone()[1]
+    backpackBlob = _fetch_blob(conn, 'inventory_backpack')
+    storageBlob  = _fetch_blob(conn, 'inventory_storage')
+    trashBlob    = _fetch_blob(conn, 'inventory_trash')
     storage = Inventory(storageBlob)
     backpack = Inventory(backpackBlob)
     trash = Inventory(trashBlob)
