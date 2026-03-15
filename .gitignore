@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+env/
+
+# Save files (never commit personal data)
+*.sav
+*.savbak
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Claude
+settings.local.json
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Screenshots / local assets
+# screenshot.png intentionally tracked for README
+
+*.spec
