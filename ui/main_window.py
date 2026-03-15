@@ -6,10 +6,14 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QFrame, QSplitter,
-    QScrollArea, QGridLayout, QToolButton, QTabBar,
+    QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton,
 )
 
 from utils.loaders import load_inventories, load_gold
+from utils.savers import save_inventories, save_gold
+
+# mapping tab label → save_inventories key
+TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
 
 ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "img")
 MONEY_ICON = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "money.png")
@@ -36,17 +40,31 @@ class MainWindow(QMainWindow):
         self.resize(960, 640)
 
         self.sav_path = sav_path
-        inventories = load_inventories(sav_path)
-        self.golds = load_gold(sav_path)
-        self.inv_items = {
-            "Storage": inventories["storage"].items,
-            "Trash":   inventories["trash"].items,
-        }
+        self._selected_item_idx: int | None = None
+        self._selected_inv_key: str | None = None
         self._selected_btn: QToolButton | None = None
 
+        self._load_data()
         self._build_ui()
         self._build_gold_bar()
         self._populate(self.inv_items["Storage"])
+
+    # ------------------------------------------------------------------
+    # Data loading
+    # ------------------------------------------------------------------
+
+    def _load_data(self):
+        raw = load_inventories(self.sav_path)
+        self.inventories = {
+            "storage": raw["storage"],
+            "backpack": raw["backpack"],
+            "trash":    raw["trash"],
+        }
+        self.golds = load_gold(self.sav_path)
+        self.inv_items = {
+            "Storage": self.inventories["storage"].items,
+            "Trash":   self.inventories["trash"].items,
+        }
 
     # ------------------------------------------------------------------
     # UI construction
@@ -104,15 +122,25 @@ class MainWindow(QMainWindow):
         self.detail_name.setWordWrap(True)
 
         self.detail_info = QLabel()
-        self.detail_info.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
-        )
+        self.detail_info.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.detail_info.setWordWrap(True)
         self.detail_info.setTextFormat(Qt.TextFormat.RichText)
+
+        self.sell_btn = QPushButton()
+        self.sell_btn.setVisible(False)
+        self.sell_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
+            " background: #4caf50; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #43a047; }"
+            "QPushButton:pressed { background: #388e3c; }"
+        )
+        self.sell_btn.clicked.connect(self._sell_item)
 
         detail_layout.addWidget(icon_wrapper)
         detail_layout.addWidget(self.detail_name)
         detail_layout.addWidget(self.detail_info)
+        detail_layout.addSpacing(8)
+        detail_layout.addWidget(self.sell_btn)
         detail_layout.addStretch()
 
         splitter.addWidget(left_widget)
@@ -170,19 +198,42 @@ class MainWindow(QMainWindow):
 
     def _reload(self):
         current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
-
-        inventories = load_inventories(self.sav_path)
-        self.golds = load_gold(self.sav_path)
-        self.inv_items = {
-            "Storage": inventories["storage"].items,
-            "Trash":   inventories["trash"].items,
-        }
-
+        self._load_data()
         self.gold_text_label.setText(f"{self.golds:,} gold")
-
         self._clear_grid()
         self._clear_detail()
+        self.sell_btn.setVisible(False)
         self._populate(self.inv_items[current_tab])
+
+    # ------------------------------------------------------------------
+    # Sell
+    # ------------------------------------------------------------------
+
+    def _sell_item(self):
+        if self._selected_item_idx is None or self._selected_inv_key is None:
+            return
+
+        inv_key = TAB_TO_INV_KEY[self._selected_inv_key]
+        inventory = self.inventories[inv_key]
+        item = inventory.items[self._selected_item_idx]
+
+        price = int(item.price) if item.price else 0
+        self.golds += price
+        self.gold_text_label.setText(f"{self.golds:,} gold")
+
+        del inventory.raws[self._selected_item_idx]
+        del inventory.items[self._selected_item_idx]
+        inventory.count -= 1
+
+        save_inventories(self.sav_path, self.inventories)
+        save_gold(self.sav_path, self.golds)
+
+        self._selected_item_idx = None
+        self._selected_btn = None
+        self._clear_grid()
+        self._clear_detail()
+        self.sell_btn.setVisible(False)
+        self._populate(self.inv_items[self._selected_inv_key])
 
     # ------------------------------------------------------------------
     # Tab switching
@@ -248,6 +299,8 @@ class MainWindow(QMainWindow):
         if self._selected_btn and self._selected_btn is not btn:
             self._selected_btn.setChecked(False)
         self._selected_btn = btn
+        self._selected_item_idx = idx
+        self._selected_inv_key = self.tab_bar.tabText(self.tab_bar.currentIndex())
 
         item = items[idx]
         details = item.details or {}
@@ -270,14 +323,14 @@ class MainWindow(QMainWindow):
                 "rare": "#5588ff",
                 "legendary": "#ffaa00",
             }.get(rarity, "#cccccc")
-            lines.append(
-                f'<b>Rarity:</b> <span style="color:{color}">{rarity.capitalize()}</span>'
-            )
+            lines.append(f'<b>Rarity:</b> <span style="color:{color}">{rarity.capitalize()}</span>')
 
         cat = item.category or ("quest" if item.is_quest_item else "—")
         lines.append(f"<b>Category:</b> {cat}")
         lines.append(f"<b>Charges:</b> {item.charges}")
-        lines.append(f"<b>Price:</b> {item.price}")
+
+        price = int(item.price) if item.price else 0
+        lines.append(f"<b>Price:</b> {price}")
 
         if item.subname:
             lines.append(f"<b>Subname:</b> {item.subname}")
@@ -287,3 +340,6 @@ class MainWindow(QMainWindow):
             lines.append(f"<br><i>{desc}</i>")
 
         self.detail_info.setText("<br>".join(lines))
+
+        self.sell_btn.setText(f"Sell for {price} gold")
+        self.sell_btn.setVisible(True)

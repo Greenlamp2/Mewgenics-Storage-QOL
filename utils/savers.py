@@ -32,6 +32,7 @@ def build_inventory_blob(items):
 
     return writer.get()
 
+
 def save_inventories(path, inventories):
     conn = sqlite3.connect(path)
     storage = inventories.get('storage')
@@ -55,5 +56,12 @@ def save_inventories(path, inventories):
         (trashBlob,)
     )
 
+    conn.commit()
+    conn.close()
+
+
+def save_gold(path, gold):
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE properties SET data=? WHERE key='house_gold'", (int(gold),))
     conn.commit()
     conn.close()
