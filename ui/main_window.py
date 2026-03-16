@@ -236,6 +236,17 @@ class MainWindow(QMainWindow):
         reload_btn.clicked.connect(self._reload)
         bar.addWidget(reload_btn)
 
+        shop_btn = QToolButton()
+        shop_btn.setText("Token Shop")
+        shop_btn.setStyleSheet(
+            "QToolButton { font-size: 13px; font-weight: bold; padding: 2px 10px;"
+            " border: 1px solid #d4b97a; border-radius: 4px; background: #eedfa0; }"
+            "QToolButton:hover { background: #e8d080; }"
+            "QToolButton:pressed { background: #d4b97a; }"
+        )
+        shop_btn.clicked.connect(self._open_token_shop)
+        bar.addWidget(shop_btn)
+
         # ── Right side: tokens + separator + gold ─────────────────────
         right_widget = QWidget()
         right_layout = QHBoxLayout(right_widget)
@@ -279,6 +290,24 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.gold_text_label)
 
         bar.addPermanentWidget(right_widget)
+
+    # ------------------------------------------------------------------
+    # Token Shop
+    # ------------------------------------------------------------------
+
+    def _open_token_shop(self):
+        from ui.token_shop import TokenShopDialog
+        dialog = TokenShopDialog(
+            self,
+            tokens=self.tokens,
+            pool_items=self.pool_items,
+            items_pool=self.items_pool,
+            sav_path=self.sav_path,
+            inventories=self.inventories,
+        )
+        dialog.exec()
+        # Recharge tout : tokens dépensés + item potentiellement ajouté au storage
+        self._reload()
 
     # ------------------------------------------------------------------
     # Reload
