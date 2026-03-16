@@ -9,8 +9,8 @@ from PySide6.QtWidgets import (
     QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton,
 )
 
-from utils.loaders import load_inventories, load_gold, load_tokens, RARITIES
-from utils.savers import save_inventories, save_tokens
+from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, RARITIES
+from utils.savers import save_inventories, save_tokens, add_item_to_pool
 
 # mapping tab label → save_inventories key
 TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
         }
         self.golds = load_gold(self.sav_path)
         self.tokens = load_tokens()
+        self.items_pool = load_items_pool()
         self.inv_items = {
             "Storage": self.inventories["storage"].items,
             "Trash":   self.inventories["trash"].items,
@@ -151,11 +152,23 @@ class MainWindow(QMainWindow):
         )
         self.sacrifice_btn.clicked.connect(self._sacrifice_item)
 
+        self.pool_btn = QPushButton("📦 Add to Pool")
+        self.pool_btn.setVisible(False)
+        self.pool_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
+            " background: #e65100; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #bf360c; }"
+            "QPushButton:pressed { background: #bf360c; }"
+            "QPushButton:disabled { background: #888; color: #ccc; }"
+        )
+        self.pool_btn.clicked.connect(self._add_to_pool)
+
         detail_layout.addWidget(icon_wrapper)
         detail_layout.addWidget(self.detail_name)
         detail_layout.addWidget(self.detail_info)
         detail_layout.addSpacing(8)
         detail_layout.addWidget(self.sacrifice_btn)
+        detail_layout.addWidget(self.pool_btn)
         detail_layout.addStretch()
 
         splitter.addWidget(left_widget)
@@ -244,6 +257,7 @@ class MainWindow(QMainWindow):
         self._clear_grid()
         self._clear_detail()
         self.sacrifice_btn.setVisible(False)
+        self.pool_btn.setVisible(False)
         self._populate(self.inv_items[current_tab])
 
     # ------------------------------------------------------------------
@@ -257,6 +271,7 @@ class MainWindow(QMainWindow):
         self._clear_grid()
         self._clear_detail()
         self.sacrifice_btn.setVisible(False)
+        self.pool_btn.setVisible(False)
         self._populate(self.inv_items[label])
 
     def _clear_grid(self):
@@ -357,6 +372,26 @@ class MainWindow(QMainWindow):
         self.sacrifice_btn.setText(f"✦ Sacrifice → {token_label} token")
         self.sacrifice_btn.setVisible(True)
 
+        already_pooled = item.name in self.items_pool
+        self.pool_btn.setText("📦 Already in Pool" if already_pooled else "📦 Add to Pool")
+        self.pool_btn.setEnabled(not already_pooled)
+        self.pool_btn.setVisible(True)
+
+    # ------------------------------------------------------------------
+    # Pool
+    # ------------------------------------------------------------------
+
+    def _add_to_pool(self):
+        if self._selected_item_idx is None or self._selected_inv_key is None:
+            return
+        inv_key = TAB_TO_INV_KEY[self._selected_inv_key]
+        raw = self.inventories[inv_key].raws[self._selected_item_idx]
+        added = add_item_to_pool(raw)
+        if added:
+            self.items_pool[raw["name"]] = raw
+            self.pool_btn.setText("📦 Already in Pool")
+            self.pool_btn.setEnabled(False)
+
     # ------------------------------------------------------------------
     # Sacrifice
     # ------------------------------------------------------------------
@@ -386,5 +421,6 @@ class MainWindow(QMainWindow):
         self._clear_grid()
         self._clear_detail()
         self.sacrifice_btn.setVisible(False)
+        self.pool_btn.setVisible(False)
         self._populate(self.inv_items[self._selected_inv_key])
 

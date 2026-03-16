@@ -2,7 +2,7 @@ import json
 import os
 import sqlite3
 
-from utils.save_manager import TOKENS_BANK_PATH
+from utils.save_manager import TOKENS_BANK_PATH, ITEMS_POOL_PATH
 from utils.writers import BinaryWriter
 
 
@@ -74,3 +74,19 @@ def save_tokens(tokens):
     os.makedirs(os.path.dirname(TOKENS_BANK_PATH), exist_ok=True)
     with open(TOKENS_BANK_PATH, "w", encoding="utf-8") as f:
         json.dump(tokens, f, indent=2)
+
+
+def add_item_to_pool(raw):
+    """Ajoute l'item au pool si son nom n'existe pas déjà. Retourne True si ajouté."""
+    from utils.loaders import load_items_pool
+    name = raw.get("name")
+    if not name:
+        return False
+    pool = load_items_pool()
+    if name in pool:
+        return False
+    pool[name] = raw
+    os.makedirs(os.path.dirname(ITEMS_POOL_PATH), exist_ok=True)
+    with open(ITEMS_POOL_PATH, "w", encoding="utf-8") as f:
+        json.dump(pool, f, indent=2)
+    return True

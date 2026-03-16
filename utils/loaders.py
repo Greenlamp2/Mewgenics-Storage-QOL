@@ -3,7 +3,7 @@ import os
 import sqlite3
 
 from parse.inventory import Inventory
-from utils.save_manager import TOKENS_BANK_PATH
+from utils.save_manager import TOKENS_BANK_PATH, ITEMS_POOL_PATH
 
 RARITIES = ("common", "uncommon", "rare", "very_rare")
 
@@ -45,3 +45,9 @@ def load_tokens():
     with open(TOKENS_BANK_PATH, encoding="utf-8") as f:
         data = json.load(f)
     return {rarity: data.get(rarity, 0) for rarity in RARITIES}
+
+def load_items_pool():
+    if not os.path.exists(ITEMS_POOL_PATH):
+        return {}
+    with open(ITEMS_POOL_PATH, encoding="utf-8") as f:
+        return json.load(f)

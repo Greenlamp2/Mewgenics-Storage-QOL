@@ -19,3 +19,4 @@ TARGET_FILE  = "steamcampaign01.sav"
 TARGET_PATH  = os.path.join(WATCH_FOLDER, TARGET_FILE)
 CUSTOM_FOLDER         = os.path.join(WATCH_FOLDER, "custom")
 TOKENS_BANK_PATH  = os.path.join(CUSTOM_FOLDER, "tokens_bank.json")
+ITEMS_POOL_PATH  = os.path.join(CUSTOM_FOLDER, "items_pool.json")
