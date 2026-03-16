@@ -14,16 +14,13 @@ def _fetch_blob(conn, key):
 
 def load_inventories(path):
     conn = sqlite3.connect(path)
-    backpackBlob = _fetch_blob(conn, 'inventory_backpack')
     storageBlob  = _fetch_blob(conn, 'inventory_storage')
     trashBlob    = _fetch_blob(conn, 'inventory_trash')
     storage = Inventory(storageBlob)
-    backpack = Inventory(backpackBlob)
-    trash = Inventory(trashBlob)
+    trash = Inventory(trashBlob, True)
     conn.close()
 
     return {
-        'backpack': backpack,
         'storage': storage,
         'trash': trash,
     }

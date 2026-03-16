@@ -74,7 +74,6 @@ class MainWindow(QMainWindow):
         raw = load_inventories(self.sav_path)
         self.inventories = {
             "storage": raw["storage"],
-            "backpack": raw["backpack"],
             "trash":    raw["trash"],
         }
         self.golds = load_gold(self.sav_path)

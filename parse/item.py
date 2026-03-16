@@ -2,7 +2,7 @@ from catalogs.itemcatalog import item_catalog
 
 
 class Item:
-    def __init__(self, itemdict):
+    def __init__(self, itemdict, trash=False):
         self.is_quest_item = False
         self.category = None
 
@@ -13,7 +13,8 @@ class Item:
         self.field2 = itemdict.get('field2')
         self.seqId = itemdict.get('seqId')
         self.tailByte = itemdict.get('tailByte')
-        self.sef_flag = itemdict.get('sefFlag')
+        self.sep_flag = itemdict.get('sep_flag')
+        self.broken = self.sep_flag == 5 and trash
 
         self.complete()
 
@@ -28,6 +29,9 @@ class Item:
         icon_name_raw = self.details.get('name_resolved', None) or self.details.get('desc')
         self.icon_name = item_catalog.solve_icon_name(icon_name_raw)
         self.rarity = self.details.get('rarity')
-        if 'consumable' in self.rarity:
-            self.rarity = self.rarity.replace('consumable_', '')
+        try:
+            if 'consumable' in self.rarity:
+                self.rarity = self.rarity.replace('consumable_', '')
+        except Exception as e:
+            self.rarity = 'common'
         self.price = item_catalog.get_price(self.rarity)

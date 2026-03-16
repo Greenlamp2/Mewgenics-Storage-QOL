@@ -2,10 +2,11 @@ from parse.item import Item
 from utils.readers import BinaryReader
 
 class Inventory:
-    def __init__(self, blob):
+    def __init__(self, blob, trash=False):
         self.raws = []
         self.items = []
         self.count = 0
+        self.trash = trash
         self.parse(blob)
 
     def parse(self, blob):
@@ -44,7 +45,7 @@ class Inventory:
                 'sep_flag': sep_flag
             }
             self.raws.append(item)
-            self.items.append(Item(item))
+            self.items.append(Item(item, self.trash))
 
     def addItem(self, item):
         self.raws.append(item)
