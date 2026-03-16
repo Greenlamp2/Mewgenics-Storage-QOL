@@ -393,6 +393,29 @@ class TokenShopDialog(QDialog):
     def _take_item(self):
         if not self.current_item:
             return
+
+        # Warn if the save file changed since we opened the shop
+        try:
+            current_mtime = os.path.getmtime(self.sav_path)
+        except OSError:
+            current_mtime = self.loaded_mtime
+
+        if self.loaded_mtime is not None and current_mtime > self.loaded_mtime:
+            import datetime as _dt
+            date_str = _dt.datetime.fromtimestamp(current_mtime).strftime("%Y-%m-%d  %H:%M:%S")
+            reply = QMessageBox.warning(
+                self,
+                "⚠ Sauvegarde plus récente détectée",
+                f"La sauvegarde a été modifiée depuis le chargement.\n\n"
+                f"Date du fichier : {date_str}\n\n"
+                f"Continuer va écraser cette version plus récente.\n"
+                f"Il est recommandé de fermer et faire un Reload d'abord.",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Ok:
+                return
+
         storage    = self.inventories["storage"]
         new_seq_id = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
         raw        = self.items_pool.get(self.current_item.name, {})

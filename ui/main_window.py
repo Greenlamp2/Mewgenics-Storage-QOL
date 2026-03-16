@@ -375,13 +375,45 @@ class MainWindow(QMainWindow):
         except OSError:
             pass
 
+    def _confirm_if_save_changed(self) -> bool:
+        """Return True if it is safe to write.
+
+        If the save file has been modified since the last load/save, show a
+        confirmation dialog warning the user they are about to overwrite a
+        newer version.  Returns False when the user cancels.
+        """
+        try:
+            current_mtime = os.path.getmtime(self.sav_path)
+        except OSError:
+            return True  # can't check → proceed
+
+        if self._loaded_mtime is None or current_mtime == self._loaded_mtime:
+            return True  # file unchanged → safe
+
+        dt = datetime.datetime.fromtimestamp(current_mtime)
+        date_str = dt.strftime("%Y-%m-%d  %H:%M:%S")
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("⚠ Sauvegarde plus récente détectée")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(
+            f"La sauvegarde a été modifiée depuis le dernier chargement.<br><br>"
+            f"<b>Date du fichier :</b> {date_str}<br><br>"
+            f"Continuer va <b>écraser</b> cette version plus récente.<br>"
+            f"Il est recommandé de faire un <b>Reload</b> d'abord."
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        msg.button(QMessageBox.StandardButton.Ok).setText("Écraser quand même")
+        return msg.exec() == QMessageBox.StandardButton.Ok
+
     def _check_save_updated(self):
         """Called every 3 s — highlights the Reload button if the save file is newer."""
         try:
             current_mtime = os.path.getmtime(self.sav_path)
         except OSError:
             return
-        if self._loaded_mtime is not None and current_mtime > self._loaded_mtime:
+        if self._loaded_mtime is not None and current_mtime != self._loaded_mtime:
             self.reload_btn.setText("↺ Reload  ⚠ New save!")
             self.reload_btn.setStyleSheet(self._reload_btn_alert_style)
         else:
@@ -567,6 +599,8 @@ class MainWindow(QMainWindow):
     def _sacrifice_item(self):
         if self._selected_item_idx is None or self._selected_inv_key is None:
             return
+        if not self._confirm_if_save_changed():
+            return
 
         inv_key = TAB_TO_INV_KEY[self._selected_inv_key]
         inventory = self.inventories[inv_key]
@@ -598,6 +632,8 @@ class MainWindow(QMainWindow):
 
     def _move_item(self):
         if self._selected_item_idx is None or self._selected_inv_key is None:
+            return
+        if not self._confirm_if_save_changed():
             return
 
         src_key = TAB_TO_INV_KEY[self._selected_inv_key]
@@ -634,6 +670,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _sacrifice_all_trash(self):
+        if not self._confirm_if_save_changed():
+            return
         inventory = self.inventories["trash"]
 
         # Compute gains (non-broken items only)
@@ -706,6 +744,8 @@ class MainWindow(QMainWindow):
 
     def _repair_item(self):
         if self._selected_item_idx is None or self._selected_inv_key != "Trash":
+            return
+        if not self._confirm_if_save_changed():
             return
 
         inventory = self.inventories["trash"]
@@ -780,6 +820,8 @@ class MainWindow(QMainWindow):
 
     def _clone_to_storage(self):
         if self._selected_item_idx is None:
+            return
+        if not self._confirm_if_save_changed():
             return
         original_raw = list(self.items_pool.values())[self._selected_item_idx]
         storage = self.inventories["storage"]
