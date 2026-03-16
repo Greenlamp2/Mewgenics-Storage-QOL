@@ -15,6 +15,7 @@ from parse.item import Item, GhostItem
 from catalogs.itemcatalog import item_catalog
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, RARITIES
 from utils.savers import save_inventories, save_tokens, save_items_pool
+from version import APP_VERSION
 
 # mapping tab label → save_inventories key
 TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
@@ -184,7 +185,7 @@ def svg_to_pixmap(svg_path: str, size: int) -> QPixmap:
 class MainWindow(QMainWindow):
     def __init__(self, sav_path: str):
         super().__init__()
-        self.setWindowTitle("Mewgenics Storage QOL")
+        self.setWindowTitle(f"Mewgenics Storage QOL  {APP_VERSION}")
         self.resize(960, 640)
 
         self.sav_path = sav_path

@@ -1,6 +1,7 @@
 import json
 import re
 
+from utils.paths import resource_path
 from utils.utils import format_item_name
 
 filenames = {
@@ -33,7 +34,7 @@ prices = {
 class ItemCatalog:
     def __init__(self):
         self.categories = []
-        catalog = json.loads(open('data/items.json', encoding="utf-8").read())
+        catalog = json.loads(open(resource_path('data/items.json'), encoding="utf-8").read())
         for key, value in catalog.items():
             if key == 'meta':
                 continue
@@ -55,7 +56,7 @@ class ItemCatalog:
 
     def get_item_quest_full(self, category, name):
         for filename in quests_filenames:
-            url = 'data/items/' + filename
+            url = resource_path('data/items/' + filename)
             items = json.loads(open(url, encoding="utf-8").read())
             item = items.get(name, None)
             if item is not None:
@@ -70,13 +71,13 @@ class ItemCatalog:
         filename = filenames.get(category, None)
         if filename is None:
             return None
-        url = 'data/items/' + filename
+        url = resource_path('data/items/' + filename)
         items = json.loads(open(url, encoding="utf-8").read())
         item = items.get(name, None)
         return item
 
     def get_item_ability(self, ability_name):
-        url = 'data/item_abilities.json'
+        url = resource_path('data/item_abilities.json')
         abilities = json.loads(open(url, encoding="utf-8").read())
         ability = abilities.get(ability_name, None)
         return ability
@@ -93,7 +94,7 @@ class ItemCatalog:
         if not hasattr(self, '_all_items_cache'):
             cache = {}
             for filename in filenames.values():
-                url = 'data/items/' + filename
+                url = resource_path('data/items/' + filename)
                 try:
                     items = json.loads(open(url, encoding="utf-8").read())
                     cache.update(items)
