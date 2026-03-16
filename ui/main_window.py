@@ -1,6 +1,7 @@
 import os
+import datetime
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QPixmap, QPainter, QIcon
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -40,15 +41,15 @@ RARITY_BG = {
 
 
 def broken_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
-    """Return a copy of *pixmap* with a broken overlay (dark tint + red X)."""
+    """Return a copy of *pixmap* with a broken overlay (semi-transparent dark tint + red X)."""
+    from PySide6.QtGui import QPen, QColor
     result = QPixmap(pixmap.size())
     result.fill(Qt.GlobalColor.transparent)
     painter = QPainter(result)
     painter.drawPixmap(0, 0, pixmap)
-    # Dark grey tint
-    painter.fillRect(result.rect(), Qt.GlobalColor.darkGray)
+    # Semi-transparent dark tint (icon still visible underneath)
+    painter.fillRect(result.rect(), QColor(0, 0, 0, 140))
     # Red X lines
-    from PySide6.QtGui import QPen, QColor
     pen = QPen(QColor(220, 40, 40), max(2, pixmap.width() // 14))
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     painter.setPen(pen)
@@ -92,6 +93,7 @@ class MainWindow(QMainWindow):
 
     def _load_data(self):
         raw = load_inventories(self.sav_path)
+        self._loaded_mtime = os.path.getmtime(self.sav_path) if os.path.exists(self.sav_path) else None
         self.inventories = {
             "storage": raw["storage"],
             "trash":    raw["trash"],
@@ -246,16 +248,35 @@ class MainWindow(QMainWindow):
         )
 
         # ── Reload button (left) ──────────────────────────────────────
-        reload_btn = QToolButton()
-        reload_btn.setText("↺ Reload")
-        reload_btn.setStyleSheet(
+        self.reload_btn = QToolButton()
+        self.reload_btn.setText("↺ Reload")
+        self._reload_btn_normal_style = (
             "QToolButton { font-size: 13px; font-weight: bold; padding: 2px 10px;"
             " border: 1px solid #d4b97a; border-radius: 4px; background: #eedfa0; }"
             "QToolButton:hover { background: #e8d080; }"
             "QToolButton:pressed { background: #d4b97a; }"
         )
-        reload_btn.clicked.connect(self._reload)
-        bar.addWidget(reload_btn)
+        self._reload_btn_alert_style = (
+            "QToolButton { font-size: 13px; font-weight: bold; padding: 2px 10px;"
+            " border: 2px solid #e65100; border-radius: 4px; background: #ffe0b2; color: #bf360c; }"
+            "QToolButton:hover { background: #ffcc80; }"
+            "QToolButton:pressed { background: #ffb74d; }"
+        )
+        self.reload_btn.setStyleSheet(self._reload_btn_normal_style)
+        self.reload_btn.clicked.connect(self._reload)
+        bar.addWidget(self.reload_btn)
+
+        self.save_date_label = QLabel(self._get_save_date_str())
+        self.save_date_label.setStyleSheet(
+            "QLabel { color: #7a5000; font-size: 12px; padding: 0 8px; }"
+        )
+        bar.addWidget(self.save_date_label)
+
+        # ── Poll timer: detect newer save ─────────────────────────────
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(3000)   # check every 3 seconds
+        self._poll_timer.timeout.connect(self._check_save_updated)
+        self._poll_timer.start()
 
         shop_btn = QToolButton()
         shop_btn.setText("Token Shop")
@@ -334,12 +355,36 @@ class MainWindow(QMainWindow):
     # Reload
     # ------------------------------------------------------------------
 
+    def _check_save_updated(self):
+        """Called every 3 s — highlights the Reload button if the save file is newer."""
+        try:
+            current_mtime = os.path.getmtime(self.sav_path)
+        except OSError:
+            return
+        if self._loaded_mtime is not None and current_mtime > self._loaded_mtime:
+            self.reload_btn.setText("↺ Reload  ⚠ New save!")
+            self.reload_btn.setStyleSheet(self._reload_btn_alert_style)
+        else:
+            self.reload_btn.setText("↺ Reload")
+            self.reload_btn.setStyleSheet(self._reload_btn_normal_style)
+
+    def _get_save_date_str(self) -> str:
+        try:
+            mtime = os.path.getmtime(self.sav_path)
+            dt = datetime.datetime.fromtimestamp(mtime)
+            return dt.strftime("💾 %Y-%m-%d  %H:%M:%S")
+        except OSError:
+            return "💾 —"
+
     def _reload(self):
         current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
         self._load_data()
+        self.reload_btn.setText("↺ Reload")
+        self.reload_btn.setStyleSheet(self._reload_btn_normal_style)
         self.gold_text_label.setText(f"{self.golds:,} gold")
         for rarity, lbl in self.token_labels.items():
             lbl.setText(str(self.tokens.get(rarity, 0)))
+        self.save_date_label.setText(self._get_save_date_str())
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
