@@ -27,4 +27,7 @@ class Item:
         self.passives = self.details.get('passives', {})
         icon_name_raw = self.details.get('name_resolved', None) or self.details.get('desc')
         self.icon_name = item_catalog.solve_icon_name(icon_name_raw)
-        self.price = item_catalog.get_price(self.details.get('rarity'))
+        self.rarity = self.details.get('rarity')
+        if 'consumable' in self.rarity:
+            self.rarity = self.rarity.replace('consumable_', '')
+        self.price = item_catalog.get_price(self.rarity)

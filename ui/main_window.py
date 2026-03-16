@@ -331,14 +331,15 @@ class MainWindow(QMainWindow):
 
         # Info block
         lines = []
-        rarity = details.get("rarity")
+        rarity = item.rarity
         if rarity:
             color = RARITY_COLORS.get(rarity, "#cccccc")
             lines.append(f'<b>Rarity:</b> <span style="color:{color}">{rarity.capitalize()}</span>')
 
         cat = item.category or ("quest" if item.is_quest_item else "—")
         lines.append(f"<b>Category:</b> {cat}")
-        lines.append(f"<b>Charges:</b> {item.charges}")
+        if item.charges > 0:
+            lines.append(f"<b>Charges:</b> {item.charges}")
 
         price = int(item.price) if item.price else 0
         lines.append(f"<b>Price:</b> {price}")
