@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QFrame, QSplitter,
     QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton, QMessageBox,
+    QApplication,
 )
 
 from parse.item import Item, GhostItem
@@ -191,6 +192,7 @@ class MainWindow(QMainWindow):
         self._selected_inv_key: str | None = None
         self._selected_btn: QToolButton | None = None
         self._sort_key: str = "default"
+        self._multi_selection: dict[int, QToolButton] = {}   # orig_idx → btn
 
         self._load_data()
         self._build_ui()
@@ -310,6 +312,46 @@ class MainWindow(QMainWindow):
 
         left_layout.addWidget(self.tab_bar)
         left_layout.addWidget(sort_bar)
+
+        # ── Multi-selection action bar ─────────────────────────────────
+        self.multi_select_bar = QWidget()
+        self.multi_select_bar.setVisible(False)
+        self.multi_select_bar.setStyleSheet(
+            "QWidget { background: #1a2d1a; border-bottom: 1px solid #3a5a3a; }"
+        )
+        ms_layout = QHBoxLayout(self.multi_select_bar)
+        ms_layout.setContentsMargins(8, 4, 8, 4)
+        ms_layout.setSpacing(6)
+
+        self.multi_select_count_lbl = QLabel()
+        self.multi_select_count_lbl.setStyleSheet("color: #88cc44; font-weight: bold; font-size: 12px;")
+        ms_layout.addWidget(self.multi_select_count_lbl)
+        ms_layout.addStretch()
+
+        _ms_btn_style = (
+            "QPushButton { font-size: 12px; font-weight: bold; padding: 3px 10px;"
+            " border: none; border-radius: 3px; color: white; }"
+        )
+        ms_sacrifice_btn = QPushButton("✦ Sacrifice")
+        ms_sacrifice_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #7b1fa2; }"
+                                        "QPushButton:hover { background: #6a1b9a; }")
+        ms_sacrifice_btn.clicked.connect(self._sacrifice_selected)
+        ms_layout.addWidget(ms_sacrifice_btn)
+
+        ms_trash_btn = QPushButton("🗑 Trash")
+        ms_trash_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #555; }"
+                                    "QPushButton:hover { background: #444; }")
+        ms_trash_btn.clicked.connect(self._move_selected_to_trash)
+        ms_layout.addWidget(ms_trash_btn)
+
+        ms_clear_btn = QPushButton("✕")
+        ms_clear_btn.setFixedWidth(28)
+        ms_clear_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #333; }"
+                                    "QPushButton:hover { background: #222; }")
+        ms_clear_btn.clicked.connect(self._clear_multi_selection)
+        ms_layout.addWidget(ms_clear_btn)
+
+        left_layout.addWidget(self.multi_select_bar)
         left_layout.addWidget(self.sacrifice_all_btn)
         left_layout.addWidget(self._scroll_area)
 
@@ -613,14 +655,16 @@ class MainWindow(QMainWindow):
         label = self.tab_bar.tabText(index)
         self._selected_item_idx = None
         self._selected_inv_key = None
-        self._clear_grid()
+        self._clear_grid()          # also clears multi-selection
         self._clear_detail()
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
+        self._refresh_multi_bar()   # hides bar for non-Storage tabs
         self._populate(self.inv_items[label])
 
     def _clear_grid(self):
         self._selected_btn = None
+        self._clear_multi_selection()
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget():
@@ -696,13 +740,17 @@ class MainWindow(QMainWindow):
         btn.setFixedSize(ICON_SIZE + 8, ICON_SIZE + 8)
         btn.setToolTip(tooltip)
         btn.setCheckable(True)
+        btn.setProperty("item_rarity", rarity)
         btn.setStyleSheet(
             f"QToolButton {{ border: 2px solid transparent; border-radius: 4px; background: {bg}; }}"
             "QToolButton:checked { border: 2px solid #4a9eff; }"
             "QToolButton:hover   { border: 2px solid rgba(255,255,255,0.4); }"
         )
         btn.clicked.connect(
-            lambda checked, i=orig_idx, b=btn, it=items: self._on_select(i, b, it)
+            lambda checked, i=orig_idx, b=btn, it=items: self._on_select(
+                i, b, it,
+                multi=bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier)
+            )
         )
         return btn
 
@@ -788,15 +836,96 @@ class MainWindow(QMainWindow):
         return grid_row
 
     # ------------------------------------------------------------------
+    # Multi-selection helpers
+    # ------------------------------------------------------------------
+
+    def _btn_multi_style(self, btn: QToolButton, selected: bool):
+        """Switch a button between single-select (blue) and multi-select (green) style."""
+        rarity = btn.property("item_rarity") or ""
+        bg = RARITY_BG.get(rarity, "rgba(80, 80, 80, 0.20)")
+        if selected:
+            btn.setStyleSheet(
+                f"QToolButton {{ border: 3px solid #44ff44; border-radius: 4px; background: {bg}; }}"
+                "QToolButton:checked { border: 3px solid #44ff44; }"
+                "QToolButton:hover   { border: 3px solid #88ff88; }"
+            )
+        else:
+            btn.setStyleSheet(
+                f"QToolButton {{ border: 2px solid transparent; border-radius: 4px; background: {bg}; }}"
+                "QToolButton:checked { border: 2px solid #4a9eff; }"
+                "QToolButton:hover   { border: 2px solid rgba(255,255,255,0.4); }"
+            )
+
+    def _refresh_multi_bar(self):
+        n       = len(self._multi_selection)
+        in_storage = self.tab_bar.tabText(self.tab_bar.currentIndex()) == "Storage"
+        visible = n > 0 and in_storage
+        self.multi_select_bar.setVisible(visible)
+        if visible:
+            self.multi_select_count_lbl.setText(
+                f"{n} item{'s' if n != 1 else ''} selected  (Ctrl+click to add/remove)"
+            )
+
+    def _clear_multi_selection(self):
+        for btn in self._multi_selection.values():
+            self._btn_multi_style(btn, selected=False)
+            btn.setChecked(False)
+        self._multi_selection.clear()
+        self._refresh_multi_bar()
+
+    # ------------------------------------------------------------------
     # Selection
     # ------------------------------------------------------------------
 
-    def _on_select(self, idx: int, btn: QToolButton, items):
+    def _on_select(self, idx: int, btn: QToolButton, items, multi: bool = False):
+        current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
+
+        # ── Ctrl+Click in Storage → toggle multi-selection ────────────
+        if multi and current_tab == "Storage":
+            # Don't multi-select locked/ghost items
+            item_check = items[idx]
+            if getattr(item_check, "locked", False):
+                return
+
+            if idx in self._multi_selection:
+                # Deselect from multi
+                self._btn_multi_style(btn, selected=False)
+                btn.setChecked(False)
+                del self._multi_selection[idx]
+            else:
+                # Add to multi (also uncheck single-select btn if needed)
+                if self._selected_btn and self._selected_btn is not btn:
+                    self._selected_btn.setChecked(False)
+                self._selected_btn = None
+                self._selected_item_idx = None
+                self._btn_multi_style(btn, selected=True)
+                btn.setChecked(True)
+                self._multi_selection[idx] = btn
+
+            self._refresh_multi_bar()
+
+            # Update detail panel
+            n = len(self._multi_selection)
+            if n == 0:
+                self._clear_detail()
+                self._hide_all_action_btns()
+            else:
+                self.detail_icon.clear()
+                self.detail_name.setText(f"{n} item{'s' if n != 1 else ''} selected")
+                self.detail_info.setText(
+                    '<span style="color:#888">Use the bar above to sacrifice<br>or move to trash.</span>'
+                )
+                self._hide_all_action_btns()
+            return
+
+        # ── Regular click → clear multi-selection, single-select ──────
+        self._clear_multi_selection()
+
         if self._selected_btn and self._selected_btn is not btn:
             self._selected_btn.setChecked(False)
         self._selected_btn = btn
         self._selected_item_idx = idx
-        self._selected_inv_key = self.tab_bar.tabText(self.tab_bar.currentIndex())
+        self._selected_inv_key = current_tab
 
         item = items[idx]
         details = item.details or {}
@@ -862,6 +991,105 @@ class MainWindow(QMainWindow):
                 else:
                     self.move_btn.setText("📦 Move to Storage")
             self.move_btn.setVisible(not is_broken)
+
+    # ------------------------------------------------------------------
+    # Multi-selection actions (Storage only)
+    # ------------------------------------------------------------------
+
+    def _sacrifice_selected(self):
+        if not self._multi_selection:
+            return
+        if not self._confirm_if_save_changed():
+            return
+
+        inventory = self.inventories["storage"]
+        indices   = sorted(self._multi_selection.keys())
+
+        # Compute gains
+        gains: dict[str, int] = {}
+        for idx in indices:
+            item = inventory.items[idx]
+            r = item.rarity
+            if r in self.tokens:
+                gains[r] = gains.get(r, 0) + 1
+
+        if not gains:
+            return
+
+        # Confirmation
+        lines = []
+        for r, count in gains.items():
+            color = RARITY_COLORS.get(r, "#cccccc")
+            label = r.replace("_", " ").capitalize()
+            lines.append(f'<span style="color:{color}"><b>{count}× {label} token</b></span>')
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Sacrifice la sélection")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(
+            f"Sacrifier <b>{len(indices)} item(s)</b> ?<br><br>"
+            f"Vous allez gagner :<br>" + "<br>".join(lines)
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        # Apply (remove in reverse order to preserve indices)
+        for idx in sorted(indices, reverse=True):
+            item = inventory.items[idx]
+            if item.rarity in self.tokens:
+                self.tokens[item.rarity] += 1
+                self.token_labels[item.rarity].setText(str(self.tokens[item.rarity]))
+            del inventory.raws[idx]
+            del inventory.items[idx]
+            inventory.count -= 1
+
+        self._save_inventories()
+        save_tokens(self.tokens, self._loaded_mtime)
+        self._clear_multi_selection()
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._populate(self.inv_items["Storage"])
+
+    def _move_selected_to_trash(self):
+        if not self._multi_selection:
+            return
+        if not self._confirm_if_save_changed():
+            return
+
+        storage = self.inventories["storage"]
+        trash   = self.inventories["trash"]
+        indices = sorted(self._multi_selection.keys(), reverse=True)
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Déplacer vers Trash")
+        msg.setText(f"Déplacer <b>{len(indices)} item(s)</b> vers le Trash ?")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        for idx in indices:
+            raw  = storage.raws[idx]
+            del storage.raws[idx]
+            del storage.items[idx]
+            storage.count -= 1
+            new_seq = max((r.get("seqId", 0) for r in trash.raws), default=0) + 1
+            new_raw = {**raw, "seqId": new_seq}
+            trash.raws.append(new_raw)
+            trash.items.append(Item(new_raw))
+            trash.count += 1
+
+        self._save_inventories()
+        self._clear_multi_selection()
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
+        self._populate(self.inv_items["Storage"])
 
     # ------------------------------------------------------------------
     # Sacrifice
