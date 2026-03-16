@@ -37,3 +37,6 @@ desktop.ini
 AGENTS.md
 build.ps1
 installer.iss
+*.exe
+*.ps1
+*.iss
