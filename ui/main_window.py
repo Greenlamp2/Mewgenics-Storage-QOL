@@ -1,5 +1,4 @@
 import os
-import datetime
 
 from PySide6.QtCore import Qt, QSize, QTimer, QPoint
 from PySide6.QtGui import QPixmap, QPainter, QIcon
@@ -13,8 +12,8 @@ from PySide6.QtWidgets import (
 
 from parse.item import Item, GhostItem
 from catalogs.itemcatalog import item_catalog
-from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, RARITIES
-from utils.savers import save_inventories, save_tokens, save_items_pool
+from utils.loaders import RARITIES
+from app_controller import AppController, EXCLUDED_RARITIES
 from version import APP_VERSION
 
 # mapping tab label → save_inventories key
@@ -27,7 +26,6 @@ MONEY_ICON  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets",
 TOKENS_DIR  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "tokens")
 GRID_COLS = 7
 ICON_SIZE = 56
-EXCLUDED_RARITIES = {"sidequest", "quest"}
 
 RARITY_COLORS = {
     "common":    "#aaaaaa",
@@ -189,62 +187,18 @@ class MainWindow(QMainWindow):
         self.resize(960, 640)
 
         self.sav_path = sav_path
+        self.ctrl = AppController(sav_path)
+
         self._selected_item_idx: int | None = None
         self._selected_inv_key: str | None = None
         self._selected_btn: QToolButton | None = None
         self._sort_key: str = "default"
-        self._multi_selection: dict[int, QToolButton] = {}   # orig_idx → btn
+        self._multi_selection: dict[int, QToolButton] = {}
 
-        self._load_data()
+        self.ctrl.load_data()
         self._build_ui()
         self._build_gold_bar()
-        self._populate(self.inv_items["Storage"])
-
-    # ------------------------------------------------------------------
-    # Data loading
-    # ------------------------------------------------------------------
-
-    def _load_data(self):
-        raw = load_inventories(self.sav_path)
-        self._loaded_mtime = os.path.getmtime(self.sav_path) if os.path.exists(self.sav_path) else None
-        self.inventories = {
-            "storage": raw["storage"],
-            "trash":    raw["trash"],
-        }
-        self.golds = load_gold(self.sav_path)
-        self.tokens = load_tokens(self._loaded_mtime)
-        self.items_pool = load_items_pool()
-
-        # Auto-ajout des items storage + trash dans la pool (sans écraser les existants)
-        changed = False
-        for inv_key in ("storage", "trash"):
-            for raw in self.inventories[inv_key].raws:
-                name = raw.get("name")
-                if name and name not in self.items_pool:
-                    self.items_pool[name] = raw
-                    changed = True
-        if changed:
-            save_items_pool(self.items_pool)
-
-        self.pool_items = [Item(r) for r in self.items_pool.values()]
-
-        # Undiscovered items — all catalog items not yet in the pool
-        discovered_names = set(self.items_pool.keys())
-        all_catalog = item_catalog.get_all_non_quest_items()
-        self.undiscovered_pool_items = [
-            GhostItem(name, details)
-            for name, details in all_catalog.items()
-            if name not in discovered_names
-            and details is not None
-            and details.get("rarity") not in EXCLUDED_RARITIES
-            and details.get("rarity") is not None
-        ]
-
-        self.inv_items = {
-            "Storage": self.inventories["storage"].items,
-            "Trash":   self.inventories["trash"].items,
-            "Pool":    self.pool_items + self.undiscovered_pool_items,
-        }
+        self._populate(self.ctrl.inv_items["Storage"])
 
     # ------------------------------------------------------------------
     # UI construction
@@ -260,7 +214,7 @@ class MainWindow(QMainWindow):
         left_layout.setSpacing(0)
 
         self.tab_bar = QTabBar()
-        for label in self.inv_items:
+        for label in self.ctrl.inv_items:
             self.tab_bar.addTab(label)
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
 
@@ -441,7 +395,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
     # ------------------------------------------------------------------
-    # Gold bar
+    # Gold / token bar
     # ------------------------------------------------------------------
 
     def _build_gold_bar(self):
@@ -470,7 +424,7 @@ class MainWindow(QMainWindow):
         self.reload_btn.clicked.connect(self._reload)
         bar.addWidget(self.reload_btn)
 
-        self.save_date_label = QLabel(self._get_save_date_str())
+        self.save_date_label = QLabel(self.ctrl.get_save_date_str())
         self.save_date_label.setStyleSheet(
             "QLabel { color: #7a5000; font-size: 12px; padding: 0 8px; }"
         )
@@ -478,7 +432,7 @@ class MainWindow(QMainWindow):
 
         # ── Poll timer: detect newer save ─────────────────────────────
         self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(3000)   # check every 3 seconds
+        self._poll_timer.setInterval(3000)
         self._poll_timer.timeout.connect(self._check_save_updated)
         self._poll_timer.start()
 
@@ -508,10 +462,13 @@ class MainWindow(QMainWindow):
             icon_lbl = QLabel()
             pixmap = QPixmap(token_path)
             if not pixmap.isNull():
-                icon_lbl.setPixmap(pixmap.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                icon_lbl.setPixmap(
+                    pixmap.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio,
+                                  Qt.TransformationMode.SmoothTransformation)
+                )
             right_layout.addWidget(icon_lbl)
 
-            count_lbl = QLabel(str(self.tokens.get(rarity, 0)))
+            count_lbl = QLabel(str(self.ctrl.tokens.get(rarity, 0)))
             count_lbl.setStyleSheet(label_style)
             right_layout.addWidget(count_lbl)
             self.token_labels[rarity] = count_lbl
@@ -526,10 +483,13 @@ class MainWindow(QMainWindow):
         money_lbl = QLabel()
         money_px = QPixmap(MONEY_ICON)
         if not money_px.isNull():
-            money_lbl.setPixmap(money_px.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            money_lbl.setPixmap(
+                money_px.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio,
+                                Qt.TransformationMode.SmoothTransformation)
+            )
         right_layout.addWidget(money_lbl)
 
-        self.gold_text_label = QLabel(f"{self.golds:,} gold")
+        self.gold_text_label = QLabel(f"{self.ctrl.golds:,} gold")
         self.gold_text_label.setStyleSheet(
             "QLabel { color: #7a5000; font-size: 14px; font-weight: bold; }"
         )
@@ -545,46 +505,26 @@ class MainWindow(QMainWindow):
         from ui.token_shop import TokenShopDialog
         dialog = TokenShopDialog(
             self,
-            tokens=self.tokens,
-            pool_items=self.pool_items,
-            items_pool=self.items_pool,
+            tokens=self.ctrl.tokens,
+            pool_items=self.ctrl.pool_items,
+            items_pool=self.ctrl.items_pool,
             sav_path=self.sav_path,
-            inventories=self.inventories,
-            loaded_mtime=self._loaded_mtime,
+            inventories=self.ctrl.inventories,
+            loaded_mtime=self.ctrl.loaded_mtime,
         )
         dialog.exec()
-        # Recharge tout : tokens dépensés + item potentiellement ajouté au storage
         self._reload()
 
     # ------------------------------------------------------------------
-    # Reload
+    # Save-change guard (UI dialog only)
     # ------------------------------------------------------------------
 
-    def _save_inventories(self):
-        """Wrap save_inventories and refresh _loaded_mtime to avoid self-triggering the new-save alert."""
-        save_inventories(self.sav_path, self.inventories)
-        try:
-            self._loaded_mtime = os.path.getmtime(self.sav_path)
-        except OSError:
-            pass
-
     def _confirm_if_save_changed(self) -> bool:
-        """Return True if it is safe to write.
-
-        If the save file has been modified since the last load/save, show a
-        confirmation dialog warning the user they are about to overwrite a
-        newer version.  Returns False when the user cancels.
-        """
-        try:
-            current_mtime = os.path.getmtime(self.sav_path)
-        except OSError:
-            return True  # can't check → proceed
-
-        if self._loaded_mtime is None or current_mtime == self._loaded_mtime:
-            return True  # file unchanged → safe
-
-        dt = datetime.datetime.fromtimestamp(current_mtime)
-        date_str = dt.strftime("%Y-%m-%d  %H:%M:%S")
+        """Show a confirmation dialog if the save file has been modified since last load.
+        Returns True if it is safe to proceed with a write operation."""
+        changed, _, date_str = self.ctrl.check_save_changed()
+        if not changed:
+            return True
 
         msg = QMessageBox(self)
         msg.setWindowTitle("⚠ Sauvegarde plus récente détectée")
@@ -600,41 +540,34 @@ class MainWindow(QMainWindow):
         msg.button(QMessageBox.StandardButton.Ok).setText("Écraser quand même")
         return msg.exec() == QMessageBox.StandardButton.Ok
 
+    # ------------------------------------------------------------------
+    # Poll for newer save / reload
+    # ------------------------------------------------------------------
+
     def _check_save_updated(self):
-        """Called every 3 s — highlights the Reload button if the save file is newer."""
-        try:
-            current_mtime = os.path.getmtime(self.sav_path)
-        except OSError:
-            return
-        if self._loaded_mtime is not None and current_mtime != self._loaded_mtime:
+        """Highlight the Reload button when a newer save file is detected."""
+        changed, _, _ = self.ctrl.check_save_changed()
+        if changed:
             self.reload_btn.setText("↺ Reload  ⚠ New save!")
             self.reload_btn.setStyleSheet(self._reload_btn_alert_style)
         else:
             self.reload_btn.setText("↺ Reload")
             self.reload_btn.setStyleSheet(self._reload_btn_normal_style)
 
-    def _get_save_date_str(self) -> str:
-        try:
-            mtime = os.path.getmtime(self.sav_path)
-            dt = datetime.datetime.fromtimestamp(mtime)
-            return dt.strftime("💾 %Y-%m-%d  %H:%M:%S")
-        except OSError:
-            return "💾 —"
-
     def _reload(self):
         current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
-        self._load_data()
+        self.ctrl.load_data()
         self.reload_btn.setText("↺ Reload")
         self.reload_btn.setStyleSheet(self._reload_btn_normal_style)
-        self.gold_text_label.setText(f"{self.golds:,} gold")
+        self.gold_text_label.setText(f"{self.ctrl.golds:,} gold")
         for rarity, lbl in self.token_labels.items():
-            lbl.setText(str(self.tokens.get(rarity, 0)))
-        self.save_date_label.setText(self._get_save_date_str())
+            lbl.setText(str(self.ctrl.tokens.get(rarity, 0)))
+        self.save_date_label.setText(self.ctrl.get_save_date_str())
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
-        self._populate(self.inv_items[current_tab])
+        self._populate(self.ctrl.inv_items[current_tab])
 
     def _hide_all_action_btns(self):
         self.sacrifice_btn.setVisible(False)
@@ -644,7 +577,10 @@ class MainWindow(QMainWindow):
 
     def _refresh_sacrifice_all_btn(self):
         current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
-        non_broken = [it for it in self.inventories["trash"].items if not getattr(it, "broken", False)]
+        non_broken = [
+            it for it in self.ctrl.inventories["trash"].items
+            if not getattr(it, "broken", False)
+        ]
         visible = current_tab == "Trash" and len(non_broken) > 0
         self.sacrifice_all_btn.setVisible(visible)
 
@@ -653,15 +589,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_tab_changed(self, index: int):
-        label = self.tab_bar.tabText(index)
         self._selected_item_idx = None
         self._selected_inv_key = None
-        self._clear_grid()          # also clears multi-selection
+        self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
-        self._refresh_multi_bar()   # hides bar for non-Storage tabs
-        self._populate(self.inv_items[label])
+        self._refresh_multi_bar()
+        label = self.tab_bar.tabText(index)
+        self._populate(self.ctrl.inv_items[label])
 
     def _clear_grid(self):
         self._selected_btn = None
@@ -687,15 +623,13 @@ class MainWindow(QMainWindow):
         base, active = self._sort_btn_styles
         for k, btn in self._sort_btns.items():
             btn.setStyleSheet(active if k == key else base)
-        # Re-populate current tab
         label = self.tab_bar.tabText(self.tab_bar.currentIndex())
         self._clear_grid()
-        self._populate(self.inv_items[label])
+        self._populate(self.ctrl.inv_items[label])
 
     def _sorted_indexed(self, indexed: list) -> list:
-        """Sort a list of (orig_idx, item) pairs by self._sort_key."""
         if self._sort_key == "default":
-            return indexed  # preserve original inventory order
+            return indexed
         if self._sort_key == "name":
             return sorted(indexed, key=lambda t: (
                 (t[1].details or {}).get("name_resolved") or t[1].name or ""
@@ -713,11 +647,10 @@ class MainWindow(QMainWindow):
         return indexed
 
     # ------------------------------------------------------------------
-    # Data population
+    # Data population (grid rendering)
     # ------------------------------------------------------------------
 
     def _make_item_btn(self, orig_idx: int, item, items) -> QToolButton:
-        """Build and return a styled QToolButton for one item."""
         details   = item.details or {}
         icon_path = os.path.join(ICON_DIR, item.icon_name or "")
         pixmap    = svg_to_pixmap(icon_path, ICON_SIZE)
@@ -841,7 +774,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _btn_multi_style(self, btn: QToolButton, selected: bool):
-        """Switch a button between single-select (blue) and multi-select (green) style."""
         rarity = btn.property("item_rarity") or ""
         bg = RARITY_BG.get(rarity, "rgba(80, 80, 80, 0.20)")
         if selected:
@@ -858,9 +790,9 @@ class MainWindow(QMainWindow):
             )
 
     def _refresh_multi_bar(self):
-        n       = len(self._multi_selection)
+        n          = len(self._multi_selection)
         in_storage = self.tab_bar.tabText(self.tab_bar.currentIndex()) == "Storage"
-        visible = n > 0 and in_storage
+        visible    = n > 0 and in_storage
         self.multi_select_bar.setVisible(visible)
         if visible:
             self.multi_select_count_lbl.setText(
@@ -875,7 +807,7 @@ class MainWindow(QMainWindow):
         self._refresh_multi_bar()
 
     # ------------------------------------------------------------------
-    # Selection
+    # Item selection → detail panel
     # ------------------------------------------------------------------
 
     def _on_select(self, idx: int, btn: QToolButton, items, multi: bool = False):
@@ -883,18 +815,13 @@ class MainWindow(QMainWindow):
 
         # ── Ctrl+Click in Storage → toggle multi-selection ────────────
         if multi and current_tab == "Storage":
-            # Don't multi-select locked/ghost items
-            item_check = items[idx]
-            if getattr(item_check, "locked", False):
+            if getattr(items[idx], "locked", False):
                 return
-
             if idx in self._multi_selection:
-                # Deselect from multi
                 self._btn_multi_style(btn, selected=False)
                 btn.setChecked(False)
                 del self._multi_selection[idx]
             else:
-                # Add to multi (also uncheck single-select btn if needed)
                 if self._selected_btn and self._selected_btn is not btn:
                     self._selected_btn.setChecked(False)
                 self._selected_btn = None
@@ -902,10 +829,7 @@ class MainWindow(QMainWindow):
                 self._btn_multi_style(btn, selected=True)
                 btn.setChecked(True)
                 self._multi_selection[idx] = btn
-
             self._refresh_multi_bar()
-
-            # Update detail panel
             n = len(self._multi_selection)
             if n == 0:
                 self._clear_detail()
@@ -919,16 +843,15 @@ class MainWindow(QMainWindow):
                 self._hide_all_action_btns()
             return
 
-        # ── Regular click → clear multi-selection, single-select ──────
+        # ── Regular click → single-select ─────────────────────────────
         self._clear_multi_selection()
-
         if self._selected_btn and self._selected_btn is not btn:
             self._selected_btn.setChecked(False)
         self._selected_btn = btn
         self._selected_item_idx = idx
         self._selected_inv_key = current_tab
 
-        item = items[idx]
+        item    = items[idx]
         details = item.details or {}
 
         # Large icon
@@ -939,8 +862,7 @@ class MainWindow(QMainWindow):
         self.detail_icon.setPixmap(detail_px)
 
         # Name
-        display_name = details.get("name_resolved") or item.name or "?"
-        self.detail_name.setText(display_name)
+        self.detail_name.setText(details.get("name_resolved") or item.name or "?")
 
         # Info block
         lines = []
@@ -950,23 +872,18 @@ class MainWindow(QMainWindow):
         if rarity:
             color = RARITY_COLORS.get(rarity, "#cccccc")
             lines.append(f'<b>Rarity:</b> <span style="color:{color}">{rarity.capitalize()}</span>')
-
         cat = item.category or ("quest" if item.is_quest_item else "—")
         lines.append(f"<b>Category:</b> {cat}")
         if item.charges != -1:
             lines.append(f"<b>Charges:</b> {item.charges}")
-
-
         if item.subname:
             lines.append(f"<b>Subname:</b> {item.subname}")
-
         desc = details.get("desc_resolved")
         if desc:
             lines.append(f"<br><i>{desc}</i>")
-
         self.detail_info.setText("<br>".join(lines))
 
-        is_pool_tab = self._selected_inv_key == "Pool"
+        is_pool_tab = current_tab == "Pool"
         is_broken   = getattr(item, "broken", False)
         is_locked   = getattr(item, "locked", False)
 
@@ -979,22 +896,21 @@ class MainWindow(QMainWindow):
             )
         else:
             self.clone_to_storage_btn.setVisible(False)
-            token_label = rarity.replace("_", " ").capitalize() if rarity in self.tokens else "?"
+            token_label = (
+                rarity.replace("_", " ").capitalize()
+                if rarity in self.ctrl.tokens else "?"
+            )
             self.sacrifice_btn.setText(f"✦ Sacrifice → {token_label} token")
             self.sacrifice_btn.setVisible(not is_broken)
-
-            # Repair button: only for broken items in Trash
-            self.repair_btn.setVisible(is_broken and self._selected_inv_key == "Trash")
-
+            self.repair_btn.setVisible(is_broken and current_tab == "Trash")
             if not is_broken:
-                if self._selected_inv_key == "Storage":
-                    self.move_btn.setText("🗑 Move to Trash")
-                else:
-                    self.move_btn.setText("📦 Move to Storage")
+                self.move_btn.setText(
+                    "🗑 Move to Trash" if current_tab == "Storage" else "📦 Move to Storage"
+                )
             self.move_btn.setVisible(not is_broken)
 
     # ------------------------------------------------------------------
-    # Multi-selection actions (Storage only)
+    # Multi-selection actions
     # ------------------------------------------------------------------
 
     def _sacrifice_selected(self):
@@ -1002,28 +918,16 @@ class MainWindow(QMainWindow):
             return
         if not self._confirm_if_save_changed():
             return
-
-        inventory = self.inventories["storage"]
-        indices   = sorted(self._multi_selection.keys())
-
-        # Compute gains
-        gains: dict[str, int] = {}
-        for idx in indices:
-            item = inventory.items[idx]
-            r = item.rarity
-            if r in self.tokens:
-                gains[r] = gains.get(r, 0) + 1
-
+        indices = sorted(self._multi_selection.keys())
+        gains   = self.ctrl.get_sacrifice_multiple_gains(indices)
         if not gains:
             return
 
-        # Confirmation
-        lines = []
-        for r, count in gains.items():
-            color = RARITY_COLORS.get(r, "#cccccc")
-            label = r.replace("_", " ").capitalize()
-            lines.append(f'<span style="color:{color}"><b>{count}× {label} token</b></span>')
-
+        lines = [
+            f'<span style="color:{RARITY_COLORS.get(r, "#cccccc")}">'
+            f'<b>{count}× {r.replace("_"," ").capitalize()} token</b></span>'
+            for r, count in gains.items()
+        ]
         msg = QMessageBox(self)
         msg.setWindowTitle("Sacrifice la sélection")
         msg.setTextFormat(Qt.TextFormat.RichText)
@@ -1036,34 +940,20 @@ class MainWindow(QMainWindow):
         if msg.exec() != QMessageBox.StandardButton.Yes:
             return
 
-        # Apply (remove in reverse order to preserve indices)
-        for idx in sorted(indices, reverse=True):
-            item = inventory.items[idx]
-            if item.rarity in self.tokens:
-                self.tokens[item.rarity] += 1
-                self.token_labels[item.rarity].setText(str(self.tokens[item.rarity]))
-            del inventory.raws[idx]
-            del inventory.items[idx]
-            inventory.count -= 1
-
-        self._save_inventories()
-        save_tokens(self.tokens, self._loaded_mtime)
+        self.ctrl.apply_sacrifice_multiple(indices)
+        self._sync_token_labels()
         self._clear_multi_selection()
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
-        self._populate(self.inv_items["Storage"])
+        self._populate(self.ctrl.inv_items["Storage"])
 
     def _move_selected_to_trash(self):
         if not self._multi_selection:
             return
         if not self._confirm_if_save_changed():
             return
-
-        storage = self.inventories["storage"]
-        trash   = self.inventories["trash"]
         indices = sorted(self._multi_selection.keys(), reverse=True)
-
         msg = QMessageBox(self)
         msg.setWindowTitle("Déplacer vers Trash")
         msg.setText(f"Déplacer <b>{len(indices)} item(s)</b> vers le Trash ?")
@@ -1072,28 +962,16 @@ class MainWindow(QMainWindow):
         msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
         if msg.exec() != QMessageBox.StandardButton.Yes:
             return
-
-        for idx in indices:
-            raw  = storage.raws[idx]
-            del storage.raws[idx]
-            del storage.items[idx]
-            storage.count -= 1
-            new_seq = max((r.get("seqId", 0) for r in trash.raws), default=0) + 1
-            new_raw = {**raw, "seqId": new_seq}
-            trash.raws.append(new_raw)
-            trash.items.append(Item(new_raw))
-            trash.count += 1
-
-        self._save_inventories()
+        self.ctrl.apply_move_multiple_to_trash(indices)
         self._clear_multi_selection()
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
-        self._populate(self.inv_items["Storage"])
+        self._populate(self.ctrl.inv_items["Storage"])
 
     # ------------------------------------------------------------------
-    # Sacrifice
+    # Single-item actions
     # ------------------------------------------------------------------
 
     def _sacrifice_item(self):
@@ -1101,146 +979,67 @@ class MainWindow(QMainWindow):
             return
         if not self._confirm_if_save_changed():
             return
-
-        inv_key = TAB_TO_INV_KEY[self._selected_inv_key]
-        inventory = self.inventories[inv_key]
-        item = inventory.items[self._selected_item_idx]
-        rarity = item.rarity
-
-        del inventory.raws[self._selected_item_idx]
-        del inventory.items[self._selected_item_idx]
-        inventory.count -= 1
-
-        if rarity in self.tokens:
-            self.tokens[rarity] += 1
-            self.token_labels[rarity].setText(str(self.tokens[rarity]))
-
-        self._save_inventories()
-        save_tokens(self.tokens, self._loaded_mtime)
-
+        inv_key    = TAB_TO_INV_KEY[self._selected_inv_key]
+        origin_tab = self._selected_inv_key
+        self.ctrl.apply_sacrifice_item(inv_key, self._selected_item_idx)
+        self._sync_token_labels()
         self._selected_item_idx = None
         self._selected_btn = None
         self._clear_grid()
         self._clear_detail()
         self.sacrifice_btn.setVisible(False)
         self.move_btn.setVisible(False)
-        self._populate(self.inv_items[self._selected_inv_key])
-
-    # ------------------------------------------------------------------
-    # Move item
-    # ------------------------------------------------------------------
+        self._populate(self.ctrl.inv_items[origin_tab])
 
     def _move_item(self):
         if self._selected_item_idx is None or self._selected_inv_key is None:
             return
         if not self._confirm_if_save_changed():
             return
-
-        src_key = TAB_TO_INV_KEY[self._selected_inv_key]
-        dst_key = "trash" if src_key == "storage" else "storage"
-        src_inv = self.inventories[src_key]
-        dst_inv = self.inventories[dst_key]
-
-        raw  = src_inv.raws[self._selected_item_idx]
-        item = src_inv.items[self._selected_item_idx]
-
-        del src_inv.raws[self._selected_item_idx]
-        del src_inv.items[self._selected_item_idx]
-        src_inv.count -= 1
-
-        new_seq_id = max((r.get("seqId", 0) for r in dst_inv.raws), default=0) + 1
-        new_raw = {**raw, "seqId": new_seq_id}
-        dst_inv.raws.append(new_raw)
-        dst_inv.items.append(Item(new_raw))
-        dst_inv.count += 1
-
-        self._save_inventories()
-
+        src_key    = TAB_TO_INV_KEY[self._selected_inv_key]
         origin_tab = self._selected_inv_key
+        self.ctrl.apply_move_item(src_key, self._selected_item_idx)
         self._selected_item_idx = None
         self._selected_btn = None
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
-        self._populate(self.inv_items[origin_tab])
-
-    # ------------------------------------------------------------------
-    # Sacrifice all (Trash)
-    # ------------------------------------------------------------------
+        self._populate(self.ctrl.inv_items[origin_tab])
 
     def _sacrifice_all_trash(self):
         if not self._confirm_if_save_changed():
             return
-        inventory = self.inventories["trash"]
-
-        # Compute gains (non-broken items only)
-        gains: dict[str, int] = {}
-        for item in inventory.items:
-            if not getattr(item, "broken", False):
-                r = item.rarity
-                if r in self.tokens:
-                    gains[r] = gains.get(r, 0) + 1
-
+        gains = self.ctrl.get_sacrifice_all_trash_gains()
         if not gains:
             return
 
-        # Build readable gain summary
-        token_icons = {r: os.path.join(TOKENS_DIR, f"{r}.png") for r in gains}
-        lines = []
-        for r, count in gains.items():
-            color = RARITY_COLORS.get(r, "#cccccc")
-            label = r.replace("_", " ").capitalize()
-            lines.append(f'<span style="color:{color}"><b>{count}× {label} token</b></span>')
-        gain_html = "<br>".join(lines)
-
+        lines = [
+            f'<span style="color:{RARITY_COLORS.get(r, "#cccccc")}">'
+            f'<b>{count}× {r.replace("_"," ").capitalize()} token</b></span>'
+            for r, count in gains.items()
+        ]
         msg = QMessageBox(self)
         msg.setWindowTitle("Sacrifice All")
         msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setText(
-            f"Voulez-vous vraiment sacrifier tous les objets non-brisés du Trash ?<br><br>"
-            f"Vous allez gagner :<br>{gain_html}"
+            "Voulez-vous vraiment sacrifier tous les objets non-brisés du Trash ?<br><br>"
+            "Vous allez gagner :<br>" + "<br>".join(lines)
         )
         msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
         msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
         if msg.exec() != QMessageBox.StandardButton.Yes:
             return
 
-        # Proceed with sacrifice
-        keep_raws  = []
-        keep_items = []
-        for raw, item in zip(inventory.raws, inventory.items):
-            if getattr(item, "broken", False):
-                keep_raws.append(raw)
-                keep_items.append(item)
-            else:
-                rarity = item.rarity
-                if rarity in self.tokens:
-                    self.tokens[rarity] += 1
-
-        inventory.raws  = keep_raws
-        inventory.items = keep_items
-        inventory.count = len(keep_items)
-        self.inv_items["Trash"] = inventory.items  # resync reference
-
-        for rarity, lbl in self.token_labels.items():
-            lbl.setText(str(self.tokens[rarity]))
-
-        self._save_inventories()
-        save_tokens(self.tokens, self._loaded_mtime)
-
+        self.ctrl.apply_sacrifice_all_trash()
+        self._sync_token_labels()
         self._selected_item_idx = None
         self._selected_btn = None
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
-        self._populate(self.inv_items["Trash"])
-
-
-    # ------------------------------------------------------------------
-    # Repair broken item
-    # ------------------------------------------------------------------
+        self._populate(self.ctrl.inv_items["Trash"])
 
     def _repair_item(self):
         if self._selected_item_idx is None or self._selected_inv_key != "Trash":
@@ -1248,89 +1047,59 @@ class MainWindow(QMainWindow):
         if not self._confirm_if_save_changed():
             return
 
-        inventory = self.inventories["trash"]
-        item = inventory.items[self._selected_item_idx]
-        rarity = item.rarity
-        cost = 3
-
-        # Check token availability
-        available = self.tokens.get(rarity, 0)
-        color = RARITY_COLORS.get(rarity, "#cccccc")
+        info         = self.ctrl.get_repair_info(self._selected_item_idx)
+        rarity       = info["rarity"]
+        color        = RARITY_COLORS.get(rarity, "#cccccc")
         rarity_label = rarity.replace("_", " ").capitalize()
 
-        if available < cost:
+        if not info["can_afford"]:
             msg = QMessageBox(self)
             msg.setWindowTitle("Réparation impossible")
             msg.setTextFormat(Qt.TextFormat.RichText)
             msg.setText(
                 f"Pas assez de tokens pour réparer cet objet.<br><br>"
-                f'Coût : <span style="color:{color}"><b>{cost}× {rarity_label} token</b></span><br>'
-                f'Disponible : <span style="color:{color}"><b>{available}</b></span>'
+                f'Coût : <span style="color:{color}"><b>{info["cost"]}× {rarity_label} token</b></span><br>'
+                f'Disponible : <span style="color:{color}"><b>{info["available"]}</b></span>'
             )
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg.exec()
             return
 
-        # Confirmation
         msg = QMessageBox(self)
         msg.setWindowTitle("Réparer l'objet")
         msg.setTextFormat(Qt.TextFormat.RichText)
-        display_name = item.details.get("name_resolved") or item.name or "?"
         msg.setText(
-            f"Réparer <b>{display_name}</b> et le déplacer vers le Storage ?<br><br>"
-            f'Coût : <span style="color:{color}"><b>{cost}× {rarity_label} token</b></span>'
-            f' (vous en avez <b>{available}</b>)'
+            f'Réparer <b>{info["display_name"]}</b> et le déplacer vers le Storage ?<br><br>'
+            f'Coût : <span style="color:{color}"><b>{info["cost"]}× {rarity_label} token</b></span>'
+            f' (vous en avez <b>{info["available"]}</b>)'
         )
         msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
         msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
         if msg.exec() != QMessageBox.StandardButton.Yes:
             return
 
-        # Deduct tokens
-        self.tokens[rarity] -= cost
-        self.token_labels[rarity].setText(str(self.tokens[rarity]))
-
-        # Remove from trash, fix sep_flag, add to storage
-        raw = inventory.raws[self._selected_item_idx]
-        del inventory.raws[self._selected_item_idx]
-        del inventory.items[self._selected_item_idx]
-        inventory.count -= 1
-
-        storage = self.inventories["storage"]
-        new_seq_id = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
-        repaired_raw = {**raw, "seqId": new_seq_id, "sep_flag": 1}  # reset broken flag
-        storage.raws.append(repaired_raw)
-        storage.items.append(Item(repaired_raw))
-        storage.count += 1
-
-        self._save_inventories()
-        save_tokens(self.tokens, self._loaded_mtime)
-
+        self.ctrl.apply_repair_item(self._selected_item_idx)
+        self._sync_token_labels()
         self._selected_item_idx = None
         self._selected_btn = None
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
-        self._populate(self.inv_items["Trash"])
-
-    # ------------------------------------------------------------------
-    # Clone to Storage
-    # ------------------------------------------------------------------
+        self._populate(self.ctrl.inv_items["Trash"])
 
     def _clone_to_storage(self):
         if self._selected_item_idx is None:
             return
         if not self._confirm_if_save_changed():
             return
-        original_raw = list(self.items_pool.values())[self._selected_item_idx]
-        storage = self.inventories["storage"]
-        new_seq_id = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
-        new_raw = {**original_raw, "seqId": new_seq_id}
+        self.ctrl.apply_clone_to_storage(self._selected_item_idx)
 
-        storage.raws.append(new_raw)
-        storage.items.append(Item(new_raw))
-        storage.count += 1
+    # ------------------------------------------------------------------
+    # UI helpers
+    # ------------------------------------------------------------------
 
-        self._save_inventories()
-
+    def _sync_token_labels(self):
+        """Refresh all token count labels from controller state."""
+        for rarity, lbl in self.token_labels.items():
+            lbl.setText(str(self.ctrl.tokens.get(rarity, 0)))
