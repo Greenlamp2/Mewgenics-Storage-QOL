@@ -669,10 +669,9 @@ class MainWindow(QMainWindow):
 
         cat = item.category or ("quest" if item.is_quest_item else "—")
         lines.append(f"<b>Category:</b> {cat}")
-        lines.append(f"<b>Charges:</b> {item.charges}")
+        if item.charges != -1:
+            lines.append(f"<b>Charges:</b> {item.charges}")
 
-        price = int(item.price) if item.price else 0
-        lines.append(f"<b>Price:</b> {price}")
 
         if item.subname:
             lines.append(f"<b>Subname:</b> {item.subname}")
