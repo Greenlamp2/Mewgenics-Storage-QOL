@@ -35,3 +35,25 @@ class Item:
         except Exception as e:
             self.rarity = 'common'
         self.price = item_catalog.get_price(self.rarity)
+
+
+class GhostItem:
+    """Lightweight item-like object for undiscovered items shown in the Pool."""
+    locked        = True
+    broken        = False
+    is_quest_item = False
+    subname       = ""
+    charges       = -1
+
+    def __init__(self, name: str, details: dict):
+        self.name     = name
+        self.details  = details or {}
+        self.category = item_catalog.get_category(name)
+
+        icon_name_raw = self.details.get("name_resolved") or self.details.get("desc")
+        self.icon_name = item_catalog.solve_icon_name(icon_name_raw) if icon_name_raw else None
+
+        rarity = self.details.get("rarity", "common") or "common"
+        if "consumable" in rarity:
+            rarity = rarity.replace("consumable_", "")
+        self.rarity = rarity

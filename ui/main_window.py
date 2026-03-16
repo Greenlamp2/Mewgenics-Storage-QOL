@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (
     QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton, QMessageBox,
 )
 
-from parse.item import Item
+from parse.item import Item, GhostItem
+from catalogs.itemcatalog import item_catalog
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, RARITIES
 from utils.savers import save_inventories, save_tokens, save_items_pool
 
@@ -59,6 +60,20 @@ def broken_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
     m = pixmap.width() // 5
     painter.drawLine(m, m, pixmap.width() - m, pixmap.height() - m)
     painter.drawLine(pixmap.width() - m, m, m, pixmap.height() - m)
+    painter.end()
+    return result
+
+
+def locked_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
+    """Return a desaturated, darkened copy of *pixmap* for undiscovered items."""
+    from PySide6.QtGui import QColor
+    result = QPixmap(pixmap.size())
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.setOpacity(0.30)
+    painter.drawPixmap(0, 0, pixmap)
+    painter.setOpacity(1.0)
+    painter.fillRect(result.rect(), QColor(15, 15, 25, 140))
     painter.end()
     return result
 
@@ -118,10 +133,23 @@ class MainWindow(QMainWindow):
             save_items_pool(self.items_pool)
 
         self.pool_items = [Item(r) for r in self.items_pool.values()]
+
+        # Undiscovered items — all catalog items not yet in the pool
+        discovered_names = set(self.items_pool.keys())
+        all_catalog = item_catalog.get_all_non_quest_items()
+        self.undiscovered_pool_items = [
+            GhostItem(name, details)
+            for name, details in all_catalog.items()
+            if name not in discovered_names
+            and details is not None
+            and details.get("rarity") not in EXCLUDED_RARITIES
+            and details.get("rarity") is not None
+        ]
+
         self.inv_items = {
             "Storage": self.inventories["storage"].items,
             "Trash":   self.inventories["trash"].items,
-            "Pool":    self.pool_items,
+            "Pool":    self.pool_items + self.undiscovered_pool_items,
         }
 
     # ------------------------------------------------------------------
@@ -559,10 +587,14 @@ class MainWindow(QMainWindow):
         pixmap    = svg_to_pixmap(icon_path, ICON_SIZE)
         if getattr(item, "broken", False):
             pixmap = broken_overlay_pixmap(pixmap)
+        elif getattr(item, "locked", False):
+            pixmap = locked_overlay_pixmap(pixmap)
 
         tooltip = details.get("name_resolved") or item.name or "?"
         if getattr(item, "broken", False):
             tooltip += " [BROKEN]"
+        if getattr(item, "locked", False):
+            tooltip += " [Not discovered]"
 
         rarity = details.get("rarity", "")
         bg     = RARITY_BG.get(rarity, "rgba(80, 80, 80, 0.20)")
@@ -588,30 +620,58 @@ class MainWindow(QMainWindow):
             (i, item) for i, item in enumerate(items)
             if (item.details or {}).get("rarity") not in EXCLUDED_RARITIES
         ]
-        indexed = self._sorted_indexed(indexed)
+
+        discovered = self._sorted_indexed(
+            [(i, it) for i, it in indexed if not getattr(it, "locked", False)]
+        )
+        locked = self._sorted_indexed(
+            [(i, it) for i, it in indexed if getattr(it, "locked", False)]
+        )
 
         if self._sort_key == "category":
-            self._populate_grouped(indexed, items)
+            next_row = self._populate_grouped(discovered, items, start_row=0)
         else:
-            self._populate_flat(indexed, items)
+            next_row = self._populate_flat(discovered, items, start_row=0)
 
-    def _populate_flat(self, indexed: list, items):
-        """Simple flat grid — no category headers."""
+        if locked:
+            # ── "Not yet discovered" separator ───────────────────────
+            sep = QLabel("  Not yet discovered")
+            sep.setFixedHeight(24)
+            sep.setStyleSheet(
+                "QLabel { font-size: 11px; font-weight: bold; color: #666;"
+                " background: rgba(255,255,255,0.03);"
+                " border-top: 1px solid #333; border-bottom: 1px solid #333;"
+                " padding-left: 4px; }"
+            )
+            self.grid.addWidget(sep, next_row, 0, 1, GRID_COLS)
+            next_row += 1
+
+            if self._sort_key == "category":
+                self._populate_grouped(locked, items, start_row=next_row)
+            else:
+                self._populate_flat(locked, items, start_row=next_row)
+
+    def _populate_flat(self, indexed: list, items, start_row: int = 0) -> int:
+        """Simple flat grid. Returns the next available grid row."""
         for grid_pos, (orig_idx, item) in enumerate(indexed):
-            row, col = divmod(grid_pos, GRID_COLS)
+            row = start_row + grid_pos // GRID_COLS
+            col = grid_pos % GRID_COLS
             self.grid.addWidget(self._make_item_btn(orig_idx, item, items), row, col)
+        if not indexed:
+            return start_row
+        last_pos = len(indexed) - 1
+        last_row = start_row + last_pos // GRID_COLS
+        return last_row + 1  # next empty row
 
-    def _populate_grouped(self, indexed: list, items):
-        """Grid with a spanning category header before each group."""
-        # Build ordered groups preserving sort order within each category
+    def _populate_grouped(self, indexed: list, items, start_row: int = 0) -> int:
+        """Grid with a spanning category header before each group. Returns next row."""
         groups: dict[str, list] = {}
         for orig_idx, item in indexed:
             cat = item.category or "Unknown"
             groups.setdefault(cat, []).append((orig_idx, item))
 
-        grid_row = 0
+        grid_row = start_row
         for cat, group in groups.items():
-            # ── Category header (spans full width) ───────────────────
             header = QLabel(f"  {cat.capitalize()}")
             header.setFixedHeight(24)
             header.setStyleSheet(
@@ -622,7 +682,6 @@ class MainWindow(QMainWindow):
             self.grid.addWidget(header, grid_row, 0, 1, GRID_COLS)
             grid_row += 1
 
-            # ── Items in this category ────────────────────────────────
             for col, (orig_idx, item) in enumerate(group):
                 self.grid.addWidget(
                     self._make_item_btn(orig_idx, item, items),
@@ -632,9 +691,10 @@ class MainWindow(QMainWindow):
                 if (col + 1) % GRID_COLS == 0:
                     grid_row += 1
 
-            # Always start the next category on a fresh row
             if len(group) % GRID_COLS != 0:
                 grid_row += 1
+
+        return grid_row
 
     # ------------------------------------------------------------------
     # Selection
@@ -652,7 +712,10 @@ class MainWindow(QMainWindow):
 
         # Large icon
         icon_path = os.path.join(ICON_DIR, item.icon_name or "")
-        self.detail_icon.setPixmap(svg_to_pixmap(icon_path, 96))
+        detail_px = svg_to_pixmap(icon_path, 96)
+        if getattr(item, "locked", False):
+            detail_px = locked_overlay_pixmap(detail_px)
+        self.detail_icon.setPixmap(detail_px)
 
         # Name
         display_name = details.get("name_resolved") or item.name or "?"
@@ -684,12 +747,15 @@ class MainWindow(QMainWindow):
 
         is_pool_tab = self._selected_inv_key == "Pool"
         is_broken   = getattr(item, "broken", False)
+        is_locked   = getattr(item, "locked", False)
 
-        if is_pool_tab:
+        if is_locked or is_pool_tab:
             self.sacrifice_btn.setVisible(False)
             self.repair_btn.setVisible(False)
             self.move_btn.setVisible(False)
-            self.clone_to_storage_btn.setVisible(DEBUG_MODE)
+            self.clone_to_storage_btn.setVisible(
+                DEBUG_MODE and is_pool_tab and not is_locked
+            )
         else:
             self.clone_to_storage_btn.setVisible(False)
             token_label = rarity.replace("_", " ").capitalize() if rarity in self.tokens else "?"

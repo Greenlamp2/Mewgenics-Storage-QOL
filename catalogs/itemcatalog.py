@@ -88,5 +88,19 @@ class ItemCatalog:
     def get_price(self, rarity):
         return prices.get(rarity, "0")
 
+    def get_all_non_quest_items(self) -> dict:
+        """Return {name: details_dict} for every non-quest item (cached)."""
+        if not hasattr(self, '_all_items_cache'):
+            cache = {}
+            for filename in filenames.values():
+                url = 'data/items/' + filename
+                try:
+                    items = json.loads(open(url, encoding="utf-8").read())
+                    cache.update(items)
+                except (FileNotFoundError, json.JSONDecodeError):
+                    pass
+            self._all_items_cache = cache
+        return self._all_items_cache
+
 
 item_catalog = ItemCatalog()
