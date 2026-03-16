@@ -99,7 +99,7 @@ class MainWindow(QMainWindow):
             "trash":    raw["trash"],
         }
         self.golds = load_gold(self.sav_path)
-        self.tokens = load_tokens()
+        self.tokens = load_tokens(self._loaded_mtime)
         self.items_pool = load_items_pool()
 
         # Auto-ajout des items storage + trash dans la pool (sans écraser les existants)
@@ -357,6 +357,7 @@ class MainWindow(QMainWindow):
             items_pool=self.items_pool,
             sav_path=self.sav_path,
             inventories=self.inventories,
+            loaded_mtime=self._loaded_mtime,
         )
         dialog.exec()
         # Recharge tout : tokens dépensés + item potentiellement ajouté au storage
@@ -581,7 +582,7 @@ class MainWindow(QMainWindow):
             self.token_labels[rarity].setText(str(self.tokens[rarity]))
 
         self._save_inventories()
-        save_tokens(self.tokens)
+        save_tokens(self.tokens, self._loaded_mtime)
 
         self._selected_item_idx = None
         self._selected_btn = None
@@ -688,7 +689,7 @@ class MainWindow(QMainWindow):
             lbl.setText(str(self.tokens[rarity]))
 
         self._save_inventories()
-        save_tokens(self.tokens)
+        save_tokens(self.tokens, self._loaded_mtime)
 
         self._selected_item_idx = None
         self._selected_btn = None
@@ -763,7 +764,7 @@ class MainWindow(QMainWindow):
         storage.count += 1
 
         self._save_inventories()
-        save_tokens(self.tokens)
+        save_tokens(self.tokens, self._loaded_mtime)
 
         self._selected_item_idx = None
         self._selected_btn = None

@@ -63,10 +63,49 @@ def save_gold(path, gold):
     conn.close()
 
 
-def save_tokens(tokens):
+def save_tokens(tokens: dict, save_mtime: float):
+    """Save tokens. Always updates 'current' state; also upserts a history snapshot."""
     os.makedirs(os.path.dirname(TOKENS_BANK_PATH), exist_ok=True)
+
+    # Load existing data
+    if os.path.exists(TOKENS_BANK_PATH):
+        with open(TOKENS_BANK_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        # Migrate old flat format (no "current" / "history")
+        if "history" not in data and "current" not in data:
+            from utils.loaders import RARITIES
+            old_tokens = {r: data.get(r, 0) for r in RARITIES}
+            data = {
+                "current": old_tokens,
+                "current_save_mtime": 0.0,
+                "history": [{"save_mtime": 0.0, "tokens": old_tokens}],
+            }
+        # Migrate old history-only format (no "current")
+        elif "history" in data and "current" not in data:
+            history = sorted(data["history"], key=lambda s: s["save_mtime"])
+            latest  = history[-1]["tokens"] if history else {}
+            data["current"]            = latest
+            data["current_save_mtime"] = history[-1]["save_mtime"] if history else 0.0
+    else:
+        data = {"current": {}, "current_save_mtime": 0.0, "history": []}
+
+    # Always update "current"
+    data["current"]            = dict(tokens)
+    data["current_save_mtime"] = save_mtime
+
+    # Upsert history snapshot
+    history = data.get("history", [])
+    for snapshot in history:
+        if snapshot["save_mtime"] == save_mtime:
+            snapshot["tokens"] = dict(tokens)
+            break
+    else:
+        history.append({"save_mtime": save_mtime, "tokens": dict(tokens)})
+
+    data["history"] = sorted(history, key=lambda s: s["save_mtime"])
+
     with open(TOKENS_BANK_PATH, "w", encoding="utf-8") as f:
-        json.dump(tokens, f, indent=2)
+        json.dump(data, f, indent=2)
 
 
 def add_item_to_pool(raw):

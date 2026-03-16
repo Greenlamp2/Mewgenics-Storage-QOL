@@ -161,7 +161,7 @@ class TokenButton(QFrame):
 
 class TokenShopDialog(QDialog):
     def __init__(self, parent, tokens: dict, pool_items: list, items_pool: dict,
-                 sav_path: str, inventories: dict):
+                 sav_path: str, inventories: dict, loaded_mtime: float | None = None):
         super().__init__(parent)
         self.setWindowTitle("Token Shop")
         self.setMinimumWidth(520)
@@ -173,6 +173,7 @@ class TokenShopDialog(QDialog):
         self.items_pool  = items_pool
         self.sav_path    = sav_path
         self.inventories = inventories
+        self.loaded_mtime = loaded_mtime
 
         self.current_item: Item | None = None
         self.current_rarity: str | None = None
@@ -315,7 +316,10 @@ class TokenShopDialog(QDialog):
 
         self._pick_item(effective_rarity, fallback=rarity)
         self._update_token_buttons()
-        save_tokens(self.tokens)
+        mtime = self.loaded_mtime if self.loaded_mtime is not None else (
+            os.path.getmtime(self.sav_path) if os.path.exists(self.sav_path) else 0.0
+        )
+        save_tokens(self.tokens, mtime)
 
     # ------------------------------------------------------------------
     # Item picking
