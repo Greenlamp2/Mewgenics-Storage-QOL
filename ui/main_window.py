@@ -16,6 +16,8 @@ from utils.savers import save_inventories, save_tokens, save_items_pool
 # mapping tab label → save_inventories key
 TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
 
+DEBUG_MODE = False   # passer à True pour activer les actions de debug (ex: Clone to Storage depuis Pool)
+
 ICON_DIR    = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "img")
 MONEY_ICON  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "money.png")
 TOKENS_DIR  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "tokens")
@@ -447,7 +449,7 @@ class MainWindow(QMainWindow):
         if is_pool_tab:
             self.sacrifice_btn.setVisible(False)
             self.move_btn.setVisible(False)
-            self.clone_to_storage_btn.setVisible(True)
+            self.clone_to_storage_btn.setVisible(DEBUG_MODE)
         else:
             self.clone_to_storage_btn.setVisible(False)
             token_label = rarity.replace("_", " ").capitalize() if rarity in self.tokens else "?"
