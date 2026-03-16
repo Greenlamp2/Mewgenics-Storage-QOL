@@ -6,7 +6,7 @@ from PySide6.QtGui import QPixmap, QPainter
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QWidget, QFrame,
+    QPushButton, QWidget, QFrame, QMessageBox,
 )
 
 from parse.item import Item
@@ -164,7 +164,7 @@ class TokenShopDialog(QDialog):
                  sav_path: str, inventories: dict):
         super().__init__(parent)
         self.setWindowTitle("Token Shop")
-        self.setMinimumWidth(680)
+        self.setMinimumWidth(520)
         self.setMinimumHeight(500)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
@@ -220,7 +220,7 @@ class TokenShopDialog(QDialog):
         # Item preview
         self.item_icon = QLabel()
         self.item_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.item_icon.setFixedSize(96, 96)
+        self.item_icon.setFixedSize(64, 64)
         icon_wrapper = QWidget()
         iw = QHBoxLayout(icon_wrapper)
         iw.addStretch()
@@ -294,6 +294,16 @@ class TokenShopDialog(QDialog):
     def _spend_tokens(self, rarity: str):
         if self.tokens.get(rarity, 0) < 3:
             return
+
+        label = RARITY_LABEL.get(rarity, rarity.capitalize())
+        reply = QMessageBox.question(
+            self,
+            "Confirmation",
+            f"Spend 3 {label} tokens?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         self.tokens[rarity] -= 3
         self.current_rarity  = rarity
         self.rerolls_left    = MAX_REROLLS
@@ -337,7 +347,7 @@ class TokenShopDialog(QDialog):
         item    = self.current_item
         details = item.details or {}
         icon_path = os.path.join(ICON_DIR, item.icon_name or "")
-        self.item_icon.setPixmap(svg_to_pixmap(icon_path, 96))
+        self.item_icon.setPixmap(svg_to_pixmap(icon_path, 64))
         name = details.get("name_resolved") or item.name or "?"
         self.item_name.setText(name)
         lines = []
