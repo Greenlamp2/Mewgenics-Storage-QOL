@@ -201,6 +201,16 @@ class MainWindow(QMainWindow):
         )
         self.sacrifice_btn.clicked.connect(self._sacrifice_item)
 
+        self.repair_btn = QPushButton("🔧 Repair → Storage")
+        self.repair_btn.setVisible(False)
+        self.repair_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
+            " background: #f57f17; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #e65100; }"
+            "QPushButton:pressed { background: #bf360c; }"
+        )
+        self.repair_btn.clicked.connect(self._repair_item)
+
         self.clone_to_storage_btn = QPushButton("⧉ Clone to Storage")
         self.clone_to_storage_btn.setVisible(False)
         self.clone_to_storage_btn.setStyleSheet(
@@ -226,6 +236,7 @@ class MainWindow(QMainWindow):
         detail_layout.addWidget(self.detail_info)
         detail_layout.addSpacing(8)
         detail_layout.addWidget(self.sacrifice_btn)
+        detail_layout.addWidget(self.repair_btn)
         detail_layout.addWidget(self.move_btn)
         detail_layout.addWidget(self.clone_to_storage_btn)
         detail_layout.addStretch()
@@ -355,6 +366,14 @@ class MainWindow(QMainWindow):
     # Reload
     # ------------------------------------------------------------------
 
+    def _save_inventories(self):
+        """Wrap save_inventories and refresh _loaded_mtime to avoid self-triggering the new-save alert."""
+        save_inventories(self.sav_path, self.inventories)
+        try:
+            self._loaded_mtime = os.path.getmtime(self.sav_path)
+        except OSError:
+            pass
+
     def _check_save_updated(self):
         """Called every 3 s — highlights the Reload button if the save file is newer."""
         try:
@@ -393,6 +412,7 @@ class MainWindow(QMainWindow):
 
     def _hide_all_action_btns(self):
         self.sacrifice_btn.setVisible(False)
+        self.repair_btn.setVisible(False)
         self.move_btn.setVisible(False)
         self.clone_to_storage_btn.setVisible(False)
 
@@ -520,14 +540,17 @@ class MainWindow(QMainWindow):
 
         if is_pool_tab:
             self.sacrifice_btn.setVisible(False)
+            self.repair_btn.setVisible(False)
             self.move_btn.setVisible(False)
             self.clone_to_storage_btn.setVisible(DEBUG_MODE)
         else:
             self.clone_to_storage_btn.setVisible(False)
             token_label = rarity.replace("_", " ").capitalize() if rarity in self.tokens else "?"
             self.sacrifice_btn.setText(f"✦ Sacrifice → {token_label} token")
-            # Broken items cannot be sacrificed
             self.sacrifice_btn.setVisible(not is_broken)
+
+            # Repair button: only for broken items in Trash
+            self.repair_btn.setVisible(is_broken and self._selected_inv_key == "Trash")
 
             if not is_broken:
                 if self._selected_inv_key == "Storage":
@@ -557,7 +580,7 @@ class MainWindow(QMainWindow):
             self.tokens[rarity] += 1
             self.token_labels[rarity].setText(str(self.tokens[rarity]))
 
-        save_inventories(self.sav_path, self.inventories)
+        self._save_inventories()
         save_tokens(self.tokens)
 
         self._selected_item_idx = None
@@ -594,7 +617,7 @@ class MainWindow(QMainWindow):
         dst_inv.items.append(Item(new_raw))
         dst_inv.count += 1
 
-        save_inventories(self.sav_path, self.inventories)
+        self._save_inventories()
 
         origin_tab = self._selected_inv_key
         self._selected_item_idx = None
@@ -664,7 +687,7 @@ class MainWindow(QMainWindow):
         for rarity, lbl in self.token_labels.items():
             lbl.setText(str(self.tokens[rarity]))
 
-        save_inventories(self.sav_path, self.inventories)
+        self._save_inventories()
         save_tokens(self.tokens)
 
         self._selected_item_idx = None
@@ -675,6 +698,80 @@ class MainWindow(QMainWindow):
         self._refresh_sacrifice_all_btn()
         self._populate(self.inv_items["Trash"])
 
+
+    # ------------------------------------------------------------------
+    # Repair broken item
+    # ------------------------------------------------------------------
+
+    def _repair_item(self):
+        if self._selected_item_idx is None or self._selected_inv_key != "Trash":
+            return
+
+        inventory = self.inventories["trash"]
+        item = inventory.items[self._selected_item_idx]
+        rarity = item.rarity
+        cost = 3
+
+        # Check token availability
+        available = self.tokens.get(rarity, 0)
+        color = RARITY_COLORS.get(rarity, "#cccccc")
+        rarity_label = rarity.replace("_", " ").capitalize()
+
+        if available < cost:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Réparation impossible")
+            msg.setTextFormat(Qt.TextFormat.RichText)
+            msg.setText(
+                f"Pas assez de tokens pour réparer cet objet.<br><br>"
+                f'Coût : <span style="color:{color}"><b>{cost}× {rarity_label} token</b></span><br>'
+                f'Disponible : <span style="color:{color}"><b>{available}</b></span>'
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
+            return
+
+        # Confirmation
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Réparer l'objet")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        display_name = item.details.get("name_resolved") or item.name or "?"
+        msg.setText(
+            f"Réparer <b>{display_name}</b> et le déplacer vers le Storage ?<br><br>"
+            f'Coût : <span style="color:{color}"><b>{cost}× {rarity_label} token</b></span>'
+            f' (vous en avez <b>{available}</b>)'
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        # Deduct tokens
+        self.tokens[rarity] -= cost
+        self.token_labels[rarity].setText(str(self.tokens[rarity]))
+
+        # Remove from trash, fix sep_flag, add to storage
+        raw = inventory.raws[self._selected_item_idx]
+        del inventory.raws[self._selected_item_idx]
+        del inventory.items[self._selected_item_idx]
+        inventory.count -= 1
+
+        storage = self.inventories["storage"]
+        new_seq_id = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
+        repaired_raw = {**raw, "seqId": new_seq_id, "sep_flag": 1}  # reset broken flag
+        storage.raws.append(repaired_raw)
+        storage.items.append(Item(repaired_raw))
+        storage.count += 1
+
+        self._save_inventories()
+        save_tokens(self.tokens)
+
+        self._selected_item_idx = None
+        self._selected_btn = None
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
+        self._populate(self.inv_items["Trash"])
 
     # ------------------------------------------------------------------
     # Clone to Storage
@@ -692,5 +789,5 @@ class MainWindow(QMainWindow):
         storage.items.append(Item(new_raw))
         storage.count += 1
 
-        save_inventories(self.sav_path, self.inventories)
+        self._save_inventories()
 
