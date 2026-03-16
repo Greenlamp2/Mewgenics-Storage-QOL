@@ -9,8 +9,9 @@ from PySide6.QtWidgets import (
     QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton,
 )
 
+from parse.item import Item
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, RARITIES
-from utils.savers import save_inventories, save_tokens, add_item_to_pool
+from utils.savers import save_inventories, save_tokens, save_items_pool
 
 # mapping tab label → save_inventories key
 TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
@@ -77,9 +78,23 @@ class MainWindow(QMainWindow):
         self.golds = load_gold(self.sav_path)
         self.tokens = load_tokens()
         self.items_pool = load_items_pool()
+
+        # Auto-ajout des items storage + trash dans la pool (sans écraser les existants)
+        changed = False
+        for inv_key in ("storage", "trash"):
+            for raw in self.inventories[inv_key].raws:
+                name = raw.get("name")
+                if name and name not in self.items_pool:
+                    self.items_pool[name] = raw
+                    changed = True
+        if changed:
+            save_items_pool(self.items_pool)
+
+        self.pool_items = [Item(r) for r in self.items_pool.values()]
         self.inv_items = {
             "Storage": self.inventories["storage"].items,
             "Trash":   self.inventories["trash"].items,
+            "Pool":    self.pool_items,
         }
 
     # ------------------------------------------------------------------
@@ -100,6 +115,16 @@ class MainWindow(QMainWindow):
             self.tab_bar.addTab(label)
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
 
+        self.sacrifice_all_btn = QPushButton("✦ Sacrifice All → Tokens")
+        self.sacrifice_all_btn.setVisible(False)
+        self.sacrifice_all_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 5px 12px;"
+            " background: #7b1fa2; color: white; border: none; }"
+            "QPushButton:hover { background: #6a1b9a; }"
+            "QPushButton:pressed { background: #4a148c; }"
+        )
+        self.sacrifice_all_btn.clicked.connect(self._sacrifice_all_trash)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -112,6 +137,7 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self.grid_container)
 
         left_layout.addWidget(self.tab_bar)
+        left_layout.addWidget(self.sacrifice_all_btn)
         left_layout.addWidget(scroll)
 
         # ── Right: detail panel ───────────────────────────────────────
@@ -152,23 +178,33 @@ class MainWindow(QMainWindow):
         )
         self.sacrifice_btn.clicked.connect(self._sacrifice_item)
 
-        self.pool_btn = QPushButton("📦 Add to Pool")
-        self.pool_btn.setVisible(False)
-        self.pool_btn.setStyleSheet(
+        self.clone_to_storage_btn = QPushButton("⧉ Clone to Storage")
+        self.clone_to_storage_btn.setVisible(False)
+        self.clone_to_storage_btn.setStyleSheet(
             "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
-            " background: #e65100; color: white; border: none; border-radius: 4px; }"
-            "QPushButton:hover { background: #bf360c; }"
-            "QPushButton:pressed { background: #bf360c; }"
-            "QPushButton:disabled { background: #888; color: #ccc; }"
+            " background: #1976d2; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #1565c0; }"
+            "QPushButton:pressed { background: #0d47a1; }"
         )
-        self.pool_btn.clicked.connect(self._add_to_pool)
+        self.clone_to_storage_btn.clicked.connect(self._clone_to_storage)
+
+        self.move_btn = QPushButton()
+        self.move_btn.setVisible(False)
+        self.move_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
+            " background: #00695c; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #00564a; }"
+            "QPushButton:pressed { background: #004d40; }"
+        )
+        self.move_btn.clicked.connect(self._move_item)
 
         detail_layout.addWidget(icon_wrapper)
         detail_layout.addWidget(self.detail_name)
         detail_layout.addWidget(self.detail_info)
         detail_layout.addSpacing(8)
         detail_layout.addWidget(self.sacrifice_btn)
-        detail_layout.addWidget(self.pool_btn)
+        detail_layout.addWidget(self.move_btn)
+        detail_layout.addWidget(self.clone_to_storage_btn)
         detail_layout.addStretch()
 
         splitter.addWidget(left_widget)
@@ -256,9 +292,19 @@ class MainWindow(QMainWindow):
             lbl.setText(str(self.tokens.get(rarity, 0)))
         self._clear_grid()
         self._clear_detail()
-        self.sacrifice_btn.setVisible(False)
-        self.pool_btn.setVisible(False)
+        self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
         self._populate(self.inv_items[current_tab])
+
+    def _hide_all_action_btns(self):
+        self.sacrifice_btn.setVisible(False)
+        self.move_btn.setVisible(False)
+        self.clone_to_storage_btn.setVisible(False)
+
+    def _refresh_sacrifice_all_btn(self):
+        current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
+        visible = current_tab == "Trash" and len(self.inventories["trash"].items) > 0
+        self.sacrifice_all_btn.setVisible(visible)
 
     # ------------------------------------------------------------------
     # Tab switching
@@ -270,8 +316,8 @@ class MainWindow(QMainWindow):
         self._selected_inv_key = None
         self._clear_grid()
         self._clear_detail()
-        self.sacrifice_btn.setVisible(False)
-        self.pool_btn.setVisible(False)
+        self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
         self._populate(self.inv_items[label])
 
     def _clear_grid(self):
@@ -353,8 +399,7 @@ class MainWindow(QMainWindow):
 
         cat = item.category or ("quest" if item.is_quest_item else "—")
         lines.append(f"<b>Category:</b> {cat}")
-        if item.charges > 0:
-            lines.append(f"<b>Charges:</b> {item.charges}")
+        lines.append(f"<b>Charges:</b> {item.charges}")
 
         price = int(item.price) if item.price else 0
         lines.append(f"<b>Price:</b> {price}")
@@ -368,29 +413,23 @@ class MainWindow(QMainWindow):
 
         self.detail_info.setText("<br>".join(lines))
 
-        token_label = rarity.replace("_", " ").capitalize() if rarity in self.tokens else "?"
-        self.sacrifice_btn.setText(f"✦ Sacrifice → {token_label} token")
-        self.sacrifice_btn.setVisible(True)
+        is_pool_tab = self._selected_inv_key == "Pool"
 
-        already_pooled = item.name in self.items_pool
-        self.pool_btn.setText("📦 Already in Pool" if already_pooled else "📦 Add to Pool")
-        self.pool_btn.setEnabled(not already_pooled)
-        self.pool_btn.setVisible(True)
+        if is_pool_tab:
+            self.sacrifice_btn.setVisible(False)
+            self.move_btn.setVisible(False)
+            self.clone_to_storage_btn.setVisible(True)
+        else:
+            self.clone_to_storage_btn.setVisible(False)
+            token_label = rarity.replace("_", " ").capitalize() if rarity in self.tokens else "?"
+            self.sacrifice_btn.setText(f"✦ Sacrifice → {token_label} token")
+            self.sacrifice_btn.setVisible(True)
 
-    # ------------------------------------------------------------------
-    # Pool
-    # ------------------------------------------------------------------
-
-    def _add_to_pool(self):
-        if self._selected_item_idx is None or self._selected_inv_key is None:
-            return
-        inv_key = TAB_TO_INV_KEY[self._selected_inv_key]
-        raw = self.inventories[inv_key].raws[self._selected_item_idx]
-        added = add_item_to_pool(raw)
-        if added:
-            self.items_pool[raw["name"]] = raw
-            self.pool_btn.setText("📦 Already in Pool")
-            self.pool_btn.setEnabled(False)
+            if self._selected_inv_key == "Storage":
+                self.move_btn.setText("🗑 Move to Trash")
+            else:
+                self.move_btn.setText("📦 Move to Storage")
+            self.move_btn.setVisible(True)
 
     # ------------------------------------------------------------------
     # Sacrifice
@@ -403,7 +442,7 @@ class MainWindow(QMainWindow):
         inv_key = TAB_TO_INV_KEY[self._selected_inv_key]
         inventory = self.inventories[inv_key]
         item = inventory.items[self._selected_item_idx]
-        rarity = (item.details or {}).get("rarity")
+        rarity = item.rarity
 
         del inventory.raws[self._selected_item_idx]
         del inventory.items[self._selected_item_idx]
@@ -421,6 +460,91 @@ class MainWindow(QMainWindow):
         self._clear_grid()
         self._clear_detail()
         self.sacrifice_btn.setVisible(False)
-        self.pool_btn.setVisible(False)
+        self.move_btn.setVisible(False)
         self._populate(self.inv_items[self._selected_inv_key])
+
+    # ------------------------------------------------------------------
+    # Move item
+    # ------------------------------------------------------------------
+
+    def _move_item(self):
+        if self._selected_item_idx is None or self._selected_inv_key is None:
+            return
+
+        src_key = TAB_TO_INV_KEY[self._selected_inv_key]
+        dst_key = "trash" if src_key == "storage" else "storage"
+        src_inv = self.inventories[src_key]
+        dst_inv = self.inventories[dst_key]
+
+        raw  = src_inv.raws[self._selected_item_idx]
+        item = src_inv.items[self._selected_item_idx]
+
+        del src_inv.raws[self._selected_item_idx]
+        del src_inv.items[self._selected_item_idx]
+        src_inv.count -= 1
+
+        new_seq_id = max((r.get("seqId", 0) for r in dst_inv.raws), default=0) + 1
+        new_raw = {**raw, "seqId": new_seq_id}
+        dst_inv.raws.append(new_raw)
+        dst_inv.items.append(Item(new_raw))
+        dst_inv.count += 1
+
+        save_inventories(self.sav_path, self.inventories)
+
+        origin_tab = self._selected_inv_key
+        self._selected_item_idx = None
+        self._selected_btn = None
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
+        self._populate(self.inv_items[origin_tab])
+
+    # ------------------------------------------------------------------
+    # Sacrifice all (Trash)
+    # ------------------------------------------------------------------
+
+    def _sacrifice_all_trash(self):
+        inventory = self.inventories["trash"]
+        for item in inventory.items:
+            rarity = item.rarity
+            if rarity in self.tokens:
+                self.tokens[rarity] += 1
+
+        inventory.raws.clear()
+        inventory.items.clear()
+        inventory.count = 0
+
+        for rarity, lbl in self.token_labels.items():
+            lbl.setText(str(self.tokens[rarity]))
+
+        save_inventories(self.sav_path, self.inventories)
+        save_tokens(self.tokens)
+
+        self._selected_item_idx = None
+        self._selected_btn = None
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
+        self._populate(self.inv_items["Trash"])
+
+
+    # ------------------------------------------------------------------
+    # Clone to Storage
+    # ------------------------------------------------------------------
+
+    def _clone_to_storage(self):
+        if self._selected_item_idx is None:
+            return
+        original_raw = list(self.items_pool.values())[self._selected_item_idx]
+        storage = self.inventories["storage"]
+        new_seq_id = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
+        new_raw = {**original_raw, "seqId": new_seq_id}
+
+        storage.raws.append(new_raw)
+        storage.items.append(Item(new_raw))
+        storage.count += 1
+
+        save_inventories(self.sav_path, self.inventories)
 

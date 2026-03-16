@@ -90,3 +90,22 @@ def add_item_to_pool(raw):
     with open(ITEMS_POOL_PATH, "w", encoding="utf-8") as f:
         json.dump(pool, f, indent=2)
     return True
+
+
+def remove_from_pool(name):
+    """Retire l'item du pool par son nom. Retourne True si supprimé."""
+    from utils.loaders import load_items_pool
+    pool = load_items_pool()
+    if name not in pool:
+        return False
+    del pool[name]
+    os.makedirs(os.path.dirname(ITEMS_POOL_PATH), exist_ok=True)
+    with open(ITEMS_POOL_PATH, "w", encoding="utf-8") as f:
+        json.dump(pool, f, indent=2)
+    return True
+
+
+def save_items_pool(pool):
+    os.makedirs(os.path.dirname(ITEMS_POOL_PATH), exist_ok=True)
+    with open(ITEMS_POOL_PATH, "w", encoding="utf-8") as f:
+        json.dump(pool, f, indent=2)
