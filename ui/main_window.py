@@ -1,7 +1,7 @@
 import os
 import datetime
 
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import Qt, QSize, QTimer, QPoint
 from PySide6.QtGui import QPixmap, QPainter, QIcon
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -42,6 +42,97 @@ RARITY_BG = {
 
 RARITY_ORDER = {"common": 0, "uncommon": 1, "rare": 2, "very_rare": 3}
 SORT_KEYS    = ("default", "name", "rarity", "category")
+
+# Cell size used both by QGridLayout items and VirtualItemGrid
+CELL_SIZE = ICON_SIZE + 8 + 4   # button (ICON_SIZE+8) + grid spacing (4)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Virtual scroll grid — renders only visible rows
+# ──────────────────────────────────────────────────────────────────────────────
+
+class VirtualItemGrid(QWidget):
+    """Fixed-height widget that creates/hides item buttons on demand as the user scrolls."""
+
+    BUFFER_ROWS = 2   # extra rows to keep alive above and below the viewport
+
+    def __init__(self, indexed: list, items_list, make_btn_cb):
+        """
+        indexed   : list of (orig_idx, item) pairs in display order
+        items_list: the original items list (passed through to on_select callback)
+        make_btn_cb: callable(orig_idx, item, items_list) → QToolButton (without parent)
+        """
+        super().__init__()
+        self._indexed     = indexed
+        self._items_list  = items_list
+        self._make_btn    = make_btn_cb
+        self._btns: dict[int, QToolButton] = {}
+        self._scroll_area = None
+
+        n          = len(indexed)
+        self._rows = max(1, (n + GRID_COLS - 1) // GRID_COLS)
+        self.setFixedHeight(self._rows * CELL_SIZE + 8)
+
+    def attach(self, scroll_area: QScrollArea):
+        self._scroll_area = scroll_area
+        scroll_area.verticalScrollBar().valueChanged.connect(self._refresh)
+        QTimer.singleShot(0, self._refresh)   # first paint after layout settles
+
+    def _visible_idx_set(self) -> set:
+        sa = self._scroll_area
+        if sa is None:
+            return set(range(len(self._indexed)))
+
+        content = sa.widget()
+        if content is None:
+            return set()
+
+        widget_top = self.mapTo(content, QPoint(0, 0)).y()
+        scroll_y   = sa.verticalScrollBar().value()
+        view_h     = sa.viewport().height()
+
+        local_top    = scroll_y - widget_top
+        local_bottom = local_top + view_h
+
+        first_row = max(0,              int(local_top    / CELL_SIZE) - self.BUFFER_ROWS)
+        last_row  = min(self._rows - 1, int(local_bottom / CELL_SIZE) + self.BUFFER_ROWS)
+
+        visible: set[int] = set()
+        for row in range(first_row, last_row + 1):
+            for col in range(GRID_COLS):
+                idx = row * GRID_COLS + col
+                if idx < len(self._indexed):
+                    visible.add(idx)
+        return visible
+
+    def _refresh(self):
+        visible = self._visible_idx_set()
+
+        # Show / create visible buttons
+        for idx in visible:
+            if idx not in self._btns:
+                self._spawn(idx)
+            else:
+                self._btns[idx].show()
+
+        # Hide out-of-view buttons (keep alive to avoid re-rendering SVGs)
+        for idx, btn in self._btns.items():
+            if idx not in visible:
+                btn.hide()
+
+    def _spawn(self, idx: int):
+        orig_idx, item = self._indexed[idx]
+        btn = self._make_btn(orig_idx, item, self._items_list)
+        btn.setParent(self)
+        row = idx // GRID_COLS
+        col = idx % GRID_COLS
+        btn.move(col * CELL_SIZE + 4, row * CELL_SIZE + 4)
+        btn.show()
+        self._btns[idx] = btn
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh()
 
 
 def broken_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
@@ -206,21 +297,21 @@ class MainWindow(QMainWindow):
         )
         self.sacrifice_all_btn.clicked.connect(self._sacrifice_all_trash)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self.grid_container = QWidget()
         self.grid = QGridLayout(self.grid_container)
         self.grid.setSpacing(4)
         self.grid.setContentsMargins(8, 8, 8, 8)
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        scroll.setWidget(self.grid_container)
+        self._scroll_area.setWidget(self.grid_container)
 
         left_layout.addWidget(self.tab_bar)
         left_layout.addWidget(sort_bar)
         left_layout.addWidget(self.sacrifice_all_btn)
-        left_layout.addWidget(scroll)
+        left_layout.addWidget(self._scroll_area)
 
         # ── Right: detail panel ───────────────────────────────────────
         detail_frame = QFrame()
@@ -646,10 +737,10 @@ class MainWindow(QMainWindow):
             self.grid.addWidget(sep, next_row, 0, 1, GRID_COLS)
             next_row += 1
 
-            if self._sort_key == "category":
-                self._populate_grouped(locked, items, start_row=next_row)
-            else:
-                self._populate_flat(locked, items, start_row=next_row)
+            # ── Virtual scroll grid for undiscovered items ────────────
+            vgrid = VirtualItemGrid(locked, items, self._make_item_btn)
+            self.grid.addWidget(vgrid, next_row, 0, 1, GRID_COLS)
+            vgrid.attach(self._scroll_area)
 
     def _populate_flat(self, indexed: list, items, start_row: int = 0) -> int:
         """Simple flat grid. Returns the next available grid row."""
