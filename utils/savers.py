@@ -1,5 +1,8 @@
+import json
+import os
 import sqlite3
 
+from utils.save_manager import TOKENS_BANK_PATH
 from utils.writers import BinaryWriter
 
 
@@ -65,3 +68,9 @@ def save_gold(path, gold):
     conn.execute("UPDATE properties SET data=? WHERE key='house_gold'", (int(gold),))
     conn.commit()
     conn.close()
+
+
+def save_tokens(tokens):
+    os.makedirs(os.path.dirname(TOKENS_BANK_PATH), exist_ok=True)
+    with open(TOKENS_BANK_PATH, "w", encoding="utf-8") as f:
+        json.dump(tokens, f, indent=2)

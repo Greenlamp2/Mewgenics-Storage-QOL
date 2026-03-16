@@ -9,15 +9,15 @@ from PySide6.QtWidgets import (
     QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton,
 )
 
-from parse.item import Item
-from utils.loaders import load_inventories, load_gold
-from utils.savers import save_inventories, save_gold
+from utils.loaders import load_inventories, load_gold, load_tokens, RARITIES
+from utils.savers import save_inventories, save_tokens
 
 # mapping tab label → save_inventories key
 TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
 
-ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "img")
-MONEY_ICON = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "money.png")
+ICON_DIR    = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "img")
+MONEY_ICON  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "money.png")
+TOKENS_DIR  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "tokens")
 GRID_COLS = 7
 ICON_SIZE = 56
 EXCLUDED_RARITIES = {"sidequest", "quest"}
@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
             "trash":    raw["trash"],
         }
         self.golds = load_gold(self.sav_path)
+        self.tokens = load_tokens()
         self.inv_items = {
             "Storage": self.inventories["storage"].items,
             "Trash":   self.inventories["trash"].items,
@@ -140,38 +141,21 @@ class MainWindow(QMainWindow):
         self.detail_info.setWordWrap(True)
         self.detail_info.setTextFormat(Qt.TextFormat.RichText)
 
-        self.sell_btn = QPushButton()
-        self.sell_btn.setVisible(False)
-        self.sell_btn.setStyleSheet(
+        self.sacrifice_btn = QPushButton("✦ Sacrifice")
+        self.sacrifice_btn.setVisible(False)
+        self.sacrifice_btn.setStyleSheet(
             "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
-            " background: #4caf50; color: white; border: none; border-radius: 4px; }"
-            "QPushButton:hover { background: #43a047; }"
-            "QPushButton:pressed { background: #388e3c; }"
+            " background: #7b1fa2; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #6a1b9a; }"
+            "QPushButton:pressed { background: #4a148c; }"
         )
-        self.sell_btn.clicked.connect(self._sell_item)
-
-        self.duplicate_btn = QPushButton("⧉ Duplicate")
-        self.duplicate_btn.setVisible(False)
-        self.duplicate_btn.setStyleSheet(
-            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
-            " background: #1976d2; color: white; border: none; border-radius: 4px; }"
-            "QPushButton:hover { background: #1565c0; }"
-            "QPushButton:pressed { background: #0d47a1; }"
-        )
-        self.duplicate_btn.clicked.connect(self._duplicate_item)
-
-        action_row = QWidget()
-        action_layout = QHBoxLayout(action_row)
-        action_layout.setContentsMargins(0, 0, 0, 0)
-        action_layout.setSpacing(6)
-        action_layout.addWidget(self.sell_btn)
-        action_layout.addWidget(self.duplicate_btn)
+        self.sacrifice_btn.clicked.connect(self._sacrifice_item)
 
         detail_layout.addWidget(icon_wrapper)
         detail_layout.addWidget(self.detail_name)
         detail_layout.addWidget(self.detail_info)
         detail_layout.addSpacing(8)
-        detail_layout.addWidget(action_row)
+        detail_layout.addWidget(self.sacrifice_btn)
         detail_layout.addStretch()
 
         splitter.addWidget(left_widget)
@@ -191,7 +175,7 @@ class MainWindow(QMainWindow):
             "QStatusBar { background: #f5e9c8; border-top: 1px solid #d4b97a; }"
         )
 
-        # Reload button (left side)
+        # ── Reload button (left) ──────────────────────────────────────
         reload_btn = QToolButton()
         reload_btn.setText("↺ Reload")
         reload_btn.setStyleSheet(
@@ -203,25 +187,49 @@ class MainWindow(QMainWindow):
         reload_btn.clicked.connect(self._reload)
         bar.addWidget(reload_btn)
 
-        # Gold display (right side)
-        gold_widget = QWidget()
-        gold_layout = QHBoxLayout(gold_widget)
-        gold_layout.setContentsMargins(8, 2, 12, 2)
-        gold_layout.setSpacing(6)
+        # ── Right side: tokens + separator + gold ─────────────────────
+        right_widget = QWidget()
+        right_layout = QHBoxLayout(right_widget)
+        right_layout.setContentsMargins(4, 2, 12, 2)
+        right_layout.setSpacing(8)
 
-        icon_lbl = QLabel()
-        pixmap = QPixmap(MONEY_ICON)
-        if not pixmap.isNull():
-            icon_lbl.setPixmap(pixmap.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-        gold_layout.addWidget(icon_lbl)
+        label_style = "QLabel { color: #7a5000; font-size: 13px; font-weight: bold; }"
+
+        # Tokens (one per rarity)
+        self.token_labels = {}
+        for rarity in RARITIES:
+            token_path = os.path.join(TOKENS_DIR, f"{rarity}.png")
+            icon_lbl = QLabel()
+            pixmap = QPixmap(token_path)
+            if not pixmap.isNull():
+                icon_lbl.setPixmap(pixmap.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            right_layout.addWidget(icon_lbl)
+
+            count_lbl = QLabel(str(self.tokens.get(rarity, 0)))
+            count_lbl.setStyleSheet(label_style)
+            right_layout.addWidget(count_lbl)
+            self.token_labels[rarity] = count_lbl
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("QFrame { color: #d4b97a; }")
+        right_layout.addWidget(sep)
+
+        # Gold
+        money_lbl = QLabel()
+        money_px = QPixmap(MONEY_ICON)
+        if not money_px.isNull():
+            money_lbl.setPixmap(money_px.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        right_layout.addWidget(money_lbl)
 
         self.gold_text_label = QLabel(f"{self.golds:,} gold")
         self.gold_text_label.setStyleSheet(
             "QLabel { color: #7a5000; font-size: 14px; font-weight: bold; }"
         )
-        gold_layout.addWidget(self.gold_text_label)
+        right_layout.addWidget(self.gold_text_label)
 
-        bar.addPermanentWidget(gold_widget)
+        bar.addPermanentWidget(right_widget)
 
     # ------------------------------------------------------------------
     # Reload
@@ -231,42 +239,12 @@ class MainWindow(QMainWindow):
         current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
         self._load_data()
         self.gold_text_label.setText(f"{self.golds:,} gold")
+        for rarity, lbl in self.token_labels.items():
+            lbl.setText(str(self.tokens.get(rarity, 0)))
         self._clear_grid()
         self._clear_detail()
-        self.sell_btn.setVisible(False)
-        self.duplicate_btn.setVisible(False)
+        self.sacrifice_btn.setVisible(False)
         self._populate(self.inv_items[current_tab])
-
-    # ------------------------------------------------------------------
-    # Sell
-    # ------------------------------------------------------------------
-
-    def _sell_item(self):
-        if self._selected_item_idx is None or self._selected_inv_key is None:
-            return
-
-        inv_key = TAB_TO_INV_KEY[self._selected_inv_key]
-        inventory = self.inventories[inv_key]
-        item = inventory.items[self._selected_item_idx]
-
-        price = int(item.price) if item.price else 0
-        self.golds += price
-        self.gold_text_label.setText(f"{self.golds:,} gold")
-
-        del inventory.raws[self._selected_item_idx]
-        del inventory.items[self._selected_item_idx]
-        inventory.count -= 1
-
-        save_inventories(self.sav_path, self.inventories)
-        save_gold(self.sav_path, self.golds)
-
-        self._selected_item_idx = None
-        self._selected_btn = None
-        self._clear_grid()
-        self._clear_detail()
-        self.sell_btn.setVisible(False)
-        self.duplicate_btn.setVisible(False)
-        self._populate(self.inv_items[self._selected_inv_key])
 
     # ------------------------------------------------------------------
     # Tab switching
@@ -278,8 +256,7 @@ class MainWindow(QMainWindow):
         self._selected_inv_key = None
         self._clear_grid()
         self._clear_detail()
-        self.sell_btn.setVisible(False)
-        self.duplicate_btn.setVisible(False)
+        self.sacrifice_btn.setVisible(False)
         self._populate(self.inv_items[label])
 
     def _clear_grid(self):
@@ -375,30 +352,38 @@ class MainWindow(QMainWindow):
 
         self.detail_info.setText("<br>".join(lines))
 
-        self.sell_btn.setText(f"Sell for {price} gold")
-        self.sell_btn.setVisible(True)
-        self.duplicate_btn.setVisible(True)
+        token_label = rarity.replace("_", " ").capitalize() if rarity in self.tokens else "?"
+        self.sacrifice_btn.setText(f"✦ Sacrifice → {token_label} token")
+        self.sacrifice_btn.setVisible(True)
 
     # ------------------------------------------------------------------
-    # Duplicate
+    # Sacrifice
     # ------------------------------------------------------------------
 
-    def _duplicate_item(self):
+    def _sacrifice_item(self):
         if self._selected_item_idx is None or self._selected_inv_key is None:
             return
 
         inv_key = TAB_TO_INV_KEY[self._selected_inv_key]
         inventory = self.inventories[inv_key]
+        item = inventory.items[self._selected_item_idx]
+        rarity = (item.details or {}).get("rarity")
 
-        original_raw = inventory.raws[self._selected_item_idx]
-        new_seq_id = max((r.get("seqId", 0) for r in inventory.raws), default=0) + 1
-        new_raw = {**original_raw, "seqId": new_seq_id}
+        del inventory.raws[self._selected_item_idx]
+        del inventory.items[self._selected_item_idx]
+        inventory.count -= 1
 
-        inventory.raws.append(new_raw)
-        inventory.items.append(Item(new_raw))
-        inventory.count += 1
+        if rarity in self.tokens:
+            self.tokens[rarity] += 1
+            self.token_labels[rarity].setText(str(self.tokens[rarity]))
 
         save_inventories(self.sav_path, self.inventories)
+        save_tokens(self.tokens)
 
+        self._selected_item_idx = None
+        self._selected_btn = None
         self._clear_grid()
+        self._clear_detail()
+        self.sacrifice_btn.setVisible(False)
         self._populate(self.inv_items[self._selected_inv_key])
+
