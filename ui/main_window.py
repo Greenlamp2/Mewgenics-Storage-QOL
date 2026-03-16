@@ -6,7 +6,7 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QFrame, QSplitter,
-    QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton,
+    QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton, QMessageBox,
 )
 
 from parse.item import Item
@@ -37,6 +37,26 @@ RARITY_BG = {
     "rare":      "rgba(85,  136, 255, 0.30)",
     "very_rare": "rgba(255, 170,   0, 0.35)",
 }
+
+
+def broken_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
+    """Return a copy of *pixmap* with a broken overlay (dark tint + red X)."""
+    result = QPixmap(pixmap.size())
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.drawPixmap(0, 0, pixmap)
+    # Dark grey tint
+    painter.fillRect(result.rect(), Qt.GlobalColor.darkGray)
+    # Red X lines
+    from PySide6.QtGui import QPen, QColor
+    pen = QPen(QColor(220, 40, 40), max(2, pixmap.width() // 14))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    m = pixmap.width() // 5
+    painter.drawLine(m, m, pixmap.width() - m, pixmap.height() - m)
+    painter.drawLine(pixmap.width() - m, m, m, pixmap.height() - m)
+    painter.end()
+    return result
 
 
 def svg_to_pixmap(svg_path: str, size: int) -> QPixmap:
@@ -333,7 +353,8 @@ class MainWindow(QMainWindow):
 
     def _refresh_sacrifice_all_btn(self):
         current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
-        visible = current_tab == "Trash" and len(self.inventories["trash"].items) > 0
+        non_broken = [it for it in self.inventories["trash"].items if not getattr(it, "broken", False)]
+        visible = current_tab == "Trash" and len(non_broken) > 0
         self.sacrifice_all_btn.setVisible(visible)
 
     # ------------------------------------------------------------------
@@ -378,8 +399,12 @@ class MainWindow(QMainWindow):
 
             icon_path = os.path.join(ICON_DIR, item.icon_name or "")
             pixmap = svg_to_pixmap(icon_path, ICON_SIZE)
+            if getattr(item, "broken", False):
+                pixmap = broken_overlay_pixmap(pixmap)
 
             tooltip = details.get("name_resolved") or item.name or "?"
+            if getattr(item, "broken", False):
+                tooltip += " [BROKEN]"
 
             btn = QToolButton()
             btn.setIcon(QIcon(pixmap))
@@ -422,6 +447,8 @@ class MainWindow(QMainWindow):
 
         # Info block
         lines = []
+        if getattr(item, "broken", False):
+            lines.append('<b><span style="color:#e02828">⚠ BROKEN</span></b>')
         rarity = item.rarity
         if rarity:
             color = RARITY_COLORS.get(rarity, "#cccccc")
@@ -444,6 +471,7 @@ class MainWindow(QMainWindow):
         self.detail_info.setText("<br>".join(lines))
 
         is_pool_tab = self._selected_inv_key == "Pool"
+        is_broken   = getattr(item, "broken", False)
 
         if is_pool_tab:
             self.sacrifice_btn.setVisible(False)
@@ -453,13 +481,15 @@ class MainWindow(QMainWindow):
             self.clone_to_storage_btn.setVisible(False)
             token_label = rarity.replace("_", " ").capitalize() if rarity in self.tokens else "?"
             self.sacrifice_btn.setText(f"✦ Sacrifice → {token_label} token")
-            self.sacrifice_btn.setVisible(True)
+            # Broken items cannot be sacrificed
+            self.sacrifice_btn.setVisible(not is_broken)
 
-            if self._selected_inv_key == "Storage":
-                self.move_btn.setText("🗑 Move to Trash")
-            else:
-                self.move_btn.setText("📦 Move to Storage")
-            self.move_btn.setVisible(True)
+            if not is_broken:
+                if self._selected_inv_key == "Storage":
+                    self.move_btn.setText("🗑 Move to Trash")
+                else:
+                    self.move_btn.setText("📦 Move to Storage")
+            self.move_btn.setVisible(not is_broken)
 
     # ------------------------------------------------------------------
     # Sacrifice
@@ -536,14 +566,55 @@ class MainWindow(QMainWindow):
 
     def _sacrifice_all_trash(self):
         inventory = self.inventories["trash"]
-        for item in inventory.items:
-            rarity = item.rarity
-            if rarity in self.tokens:
-                self.tokens[rarity] += 1
 
-        inventory.raws.clear()
-        inventory.items.clear()
-        inventory.count = 0
+        # Compute gains (non-broken items only)
+        gains: dict[str, int] = {}
+        for item in inventory.items:
+            if not getattr(item, "broken", False):
+                r = item.rarity
+                if r in self.tokens:
+                    gains[r] = gains.get(r, 0) + 1
+
+        if not gains:
+            return
+
+        # Build readable gain summary
+        token_icons = {r: os.path.join(TOKENS_DIR, f"{r}.png") for r in gains}
+        lines = []
+        for r, count in gains.items():
+            color = RARITY_COLORS.get(r, "#cccccc")
+            label = r.replace("_", " ").capitalize()
+            lines.append(f'<span style="color:{color}"><b>{count}× {label} token</b></span>')
+        gain_html = "<br>".join(lines)
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Sacrifice All")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(
+            f"Voulez-vous vraiment sacrifier tous les objets non-brisés du Trash ?<br><br>"
+            f"Vous allez gagner :<br>{gain_html}"
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        # Proceed with sacrifice
+        keep_raws  = []
+        keep_items = []
+        for raw, item in zip(inventory.raws, inventory.items):
+            if getattr(item, "broken", False):
+                keep_raws.append(raw)
+                keep_items.append(item)
+            else:
+                rarity = item.rarity
+                if rarity in self.tokens:
+                    self.tokens[rarity] += 1
+
+        inventory.raws  = keep_raws
+        inventory.items = keep_items
+        inventory.count = len(keep_items)
+        self.inv_items["Trash"] = inventory.items  # resync reference
 
         for rarity, lbl in self.token_labels.items():
             lbl.setText(str(self.tokens[rarity]))

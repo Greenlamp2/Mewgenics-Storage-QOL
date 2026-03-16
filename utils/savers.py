@@ -39,18 +39,11 @@ def build_inventory_blob(items):
 def save_inventories(path, inventories):
     conn = sqlite3.connect(path)
     storage = inventories.get('storage')
-    backpack = inventories.get('backpack')
     trash = inventories.get('trash')
     storageBlob = build_inventory_blob(storage.raws)
     conn.execute(
         "UPDATE files SET data=? WHERE key='inventory_storage'",
         (storageBlob,)
-    )
-
-    backpackBlob = build_inventory_blob(backpack.raws)
-    conn.execute(
-        "UPDATE files SET data=? WHERE key='inventory_backpack'",
-        (backpackBlob,)
     )
 
     trashBlob = build_inventory_blob(trash.raws)
