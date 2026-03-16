@@ -19,7 +19,12 @@ RARITIES_IN_SHOP = ("common", "uncommon", "rare", "very_rare")
 RARITY_UPGRADE   = {"common": "uncommon", "uncommon": "rare", "rare": None, "very_rare": None}
 UPGRADE_CHANCE   = 0.01
 MAX_REROLLS      = 3
-POOL_REQUIRED    = 20
+POOL_REQUIRED = {
+    "common":    20,
+    "uncommon":  20,
+    "rare":      20,
+    "very_rare": 10,
+}
 
 RARITY_COLORS = {
     "common":    "#c0c0c0",
@@ -99,14 +104,14 @@ class TokenButton(QFrame):
             ))
 
     def update_state(self, token_count: int, pool_count: int):
+        required      = POOL_REQUIRED.get(self.rarity, 20)
         has_tokens    = token_count >= 3
-        has_discovery = pool_count >= POOL_REQUIRED
+        has_discovery = pool_count >= required
         self._enabled = has_tokens and has_discovery
 
         color = RARITY_COLORS.get(self.rarity, "#fff")
         bg    = RARITY_BG.get(self.rarity, "#222")
         border_color = color if self._enabled else "#444"
-        text_opacity = "1.0" if self._enabled else "0.4"
 
         self.setStyleSheet(
             f"TokenButton {{"
@@ -133,13 +138,13 @@ class TokenButton(QFrame):
             disc_text  = f"✔ {pool_count} discovered"
         else:
             disc_color = "#888"
-            disc_text  = f"{pool_count} / {POOL_REQUIRED} discovered"
+            disc_text  = f"{pool_count} / {required} discovered"
         self.discovery_lbl.setStyleSheet(f"font-size: 10px; color: {disc_color};")
         self.discovery_lbl.setText(disc_text)
 
         # Tooltip
         if not has_discovery:
-            self.setToolTip(f"Discover {POOL_REQUIRED - pool_count} more {RARITY_LABEL.get(self.rarity)} items")
+            self.setToolTip(f"Discover {required - pool_count} more {RARITY_LABEL.get(self.rarity)} items")
         elif not has_tokens:
             self.setToolTip(f"Need 3 tokens (you have {token_count})")
         else:

@@ -39,6 +39,9 @@ RARITY_BG = {
     "very_rare": "rgba(255, 170,   0, 0.35)",
 }
 
+RARITY_ORDER = {"common": 0, "uncommon": 1, "rare": 2, "very_rare": 3}
+SORT_KEYS    = ("default", "name", "rarity", "category")
+
 
 def broken_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
     """Return a copy of *pixmap* with a broken overlay (semi-transparent dark tint + red X)."""
@@ -81,6 +84,7 @@ class MainWindow(QMainWindow):
         self._selected_item_idx: int | None = None
         self._selected_inv_key: str | None = None
         self._selected_btn: QToolButton | None = None
+        self._sort_key: str = "default"
 
         self._load_data()
         self._build_ui()
@@ -138,6 +142,32 @@ class MainWindow(QMainWindow):
             self.tab_bar.addTab(label)
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
 
+        # ── Sort toolbar ──────────────────────────────────────────────
+        sort_bar = QWidget()
+        sort_layout = QHBoxLayout(sort_bar)
+        sort_layout.setContentsMargins(6, 3, 6, 3)
+        sort_layout.setSpacing(4)
+        sort_layout.addWidget(QLabel("Sort:"))
+
+        _btn_base = (
+            "QPushButton { font-size: 11px; padding: 2px 8px;"
+            " border: 1px solid #555; border-radius: 3px; background: #2d2d2d; color: #ccc; }"
+            "QPushButton:hover { background: #3a3a3a; }"
+        )
+        _btn_active = (
+            "QPushButton { font-size: 11px; font-weight: bold; padding: 2px 8px;"
+            " border: 1px solid #4a9eff; border-radius: 3px; background: #1a3a5c; color: #4a9eff; }"
+        )
+        self._sort_btns: dict[str, QPushButton] = {}
+        self._sort_btn_styles = (_btn_base, _btn_active)
+        for key in SORT_KEYS:
+            btn = QPushButton(key.capitalize())
+            btn.setStyleSheet(_btn_active if key == self._sort_key else _btn_base)
+            btn.clicked.connect(lambda _=False, k=key: self._set_sort(k))
+            self._sort_btns[key] = btn
+            sort_layout.addWidget(btn)
+        sort_layout.addStretch()
+
         self.sacrifice_all_btn = QPushButton("✦ Sacrifice All → Tokens")
         self.sacrifice_all_btn.setVisible(False)
         self.sacrifice_all_btn.setStyleSheet(
@@ -160,6 +190,7 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self.grid_container)
 
         left_layout.addWidget(self.tab_bar)
+        left_layout.addWidget(sort_bar)
         left_layout.addWidget(self.sacrifice_all_btn)
         left_layout.addWidget(scroll)
 
@@ -482,44 +513,128 @@ class MainWindow(QMainWindow):
         self.detail_info.clear()
 
     # ------------------------------------------------------------------
+    # Sorting
+    # ------------------------------------------------------------------
+
+    def _set_sort(self, key: str):
+        if key == self._sort_key:
+            return
+        self._sort_key = key
+        base, active = self._sort_btn_styles
+        for k, btn in self._sort_btns.items():
+            btn.setStyleSheet(active if k == key else base)
+        # Re-populate current tab
+        label = self.tab_bar.tabText(self.tab_bar.currentIndex())
+        self._clear_grid()
+        self._populate(self.inv_items[label])
+
+    def _sorted_indexed(self, indexed: list) -> list:
+        """Sort a list of (orig_idx, item) pairs by self._sort_key."""
+        if self._sort_key == "default":
+            return indexed  # preserve original inventory order
+        if self._sort_key == "name":
+            return sorted(indexed, key=lambda t: (
+                (t[1].details or {}).get("name_resolved") or t[1].name or ""
+            ).lower())
+        if self._sort_key == "rarity":
+            return sorted(indexed, key=lambda t: (
+                RARITY_ORDER.get(t[1].rarity, 99),
+                ((t[1].details or {}).get("name_resolved") or t[1].name or "").lower()
+            ))
+        if self._sort_key == "category":
+            return sorted(indexed, key=lambda t: (
+                t[1].category or "zzz",
+                ((t[1].details or {}).get("name_resolved") or t[1].name or "").lower()
+            ))
+        return indexed
+
+    # ------------------------------------------------------------------
     # Data population
     # ------------------------------------------------------------------
 
+    def _make_item_btn(self, orig_idx: int, item, items) -> QToolButton:
+        """Build and return a styled QToolButton for one item."""
+        details   = item.details or {}
+        icon_path = os.path.join(ICON_DIR, item.icon_name or "")
+        pixmap    = svg_to_pixmap(icon_path, ICON_SIZE)
+        if getattr(item, "broken", False):
+            pixmap = broken_overlay_pixmap(pixmap)
+
+        tooltip = details.get("name_resolved") or item.name or "?"
+        if getattr(item, "broken", False):
+            tooltip += " [BROKEN]"
+
+        rarity = details.get("rarity", "")
+        bg     = RARITY_BG.get(rarity, "rgba(80, 80, 80, 0.20)")
+
+        btn = QToolButton()
+        btn.setIcon(QIcon(pixmap))
+        btn.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
+        btn.setFixedSize(ICON_SIZE + 8, ICON_SIZE + 8)
+        btn.setToolTip(tooltip)
+        btn.setCheckable(True)
+        btn.setStyleSheet(
+            f"QToolButton {{ border: 2px solid transparent; border-radius: 4px; background: {bg}; }}"
+            "QToolButton:checked { border: 2px solid #4a9eff; }"
+            "QToolButton:hover   { border: 2px solid rgba(255,255,255,0.4); }"
+        )
+        btn.clicked.connect(
+            lambda checked, i=orig_idx, b=btn, it=items: self._on_select(i, b, it)
+        )
+        return btn
+
     def _populate(self, items):
-        grid_pos = 0
-        for idx, item in enumerate(items):
-            details = item.details or {}
-            if details.get("rarity") in EXCLUDED_RARITIES:
-                continue
+        indexed = [
+            (i, item) for i, item in enumerate(items)
+            if (item.details or {}).get("rarity") not in EXCLUDED_RARITIES
+        ]
+        indexed = self._sorted_indexed(indexed)
 
+        if self._sort_key == "category":
+            self._populate_grouped(indexed, items)
+        else:
+            self._populate_flat(indexed, items)
+
+    def _populate_flat(self, indexed: list, items):
+        """Simple flat grid — no category headers."""
+        for grid_pos, (orig_idx, item) in enumerate(indexed):
             row, col = divmod(grid_pos, GRID_COLS)
-            grid_pos += 1
+            self.grid.addWidget(self._make_item_btn(orig_idx, item, items), row, col)
 
-            icon_path = os.path.join(ICON_DIR, item.icon_name or "")
-            pixmap = svg_to_pixmap(icon_path, ICON_SIZE)
-            if getattr(item, "broken", False):
-                pixmap = broken_overlay_pixmap(pixmap)
+    def _populate_grouped(self, indexed: list, items):
+        """Grid with a spanning category header before each group."""
+        # Build ordered groups preserving sort order within each category
+        groups: dict[str, list] = {}
+        for orig_idx, item in indexed:
+            cat = item.category or "Unknown"
+            groups.setdefault(cat, []).append((orig_idx, item))
 
-            tooltip = details.get("name_resolved") or item.name or "?"
-            if getattr(item, "broken", False):
-                tooltip += " [BROKEN]"
-
-            btn = QToolButton()
-            btn.setIcon(QIcon(pixmap))
-            btn.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
-            btn.setFixedSize(ICON_SIZE + 8, ICON_SIZE + 8)
-            btn.setToolTip(tooltip)
-            btn.setCheckable(True)
-            rarity = details.get("rarity", "")
-            bg = RARITY_BG.get(rarity, "rgba(80, 80, 80, 0.20)")
-            btn.setStyleSheet(
-                f"QToolButton {{ border: 2px solid transparent; border-radius: 4px; background: {bg}; }}"
-                "QToolButton:checked { border: 2px solid #4a9eff; }"
-                "QToolButton:hover { border: 2px solid rgba(255,255,255,0.4); }"
+        grid_row = 0
+        for cat, group in groups.items():
+            # ── Category header (spans full width) ───────────────────
+            header = QLabel(f"  {cat.capitalize()}")
+            header.setFixedHeight(24)
+            header.setStyleSheet(
+                "QLabel { font-size: 11px; font-weight: bold; color: #aaaaaa;"
+                " background: rgba(255,255,255,0.05);"
+                " border-bottom: 1px solid #444; padding-left: 4px; }"
             )
-            btn.clicked.connect(lambda checked, i=idx, b=btn, it=items: self._on_select(i, b, it))
+            self.grid.addWidget(header, grid_row, 0, 1, GRID_COLS)
+            grid_row += 1
 
-            self.grid.addWidget(btn, row, col)
+            # ── Items in this category ────────────────────────────────
+            for col, (orig_idx, item) in enumerate(group):
+                self.grid.addWidget(
+                    self._make_item_btn(orig_idx, item, items),
+                    grid_row,
+                    col % GRID_COLS,
+                )
+                if (col + 1) % GRID_COLS == 0:
+                    grid_row += 1
+
+            # Always start the next category on a fresh row
+            if len(group) % GRID_COLS != 0:
+                grid_row += 1
 
     # ------------------------------------------------------------------
     # Selection
