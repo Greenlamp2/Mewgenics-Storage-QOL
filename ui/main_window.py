@@ -378,6 +378,16 @@ class MainWindow(QMainWindow):
         )
         self.move_btn.clicked.connect(self._move_item)
 
+        self.send_gift_btn = QPushButton("🎁 Send Gift")
+        self.send_gift_btn.setVisible(False)
+        self.send_gift_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
+            " background: #6a3d9a; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #5a2d8a; }"
+            "QPushButton:pressed { background: #4a1d7a; }"
+        )
+        self.send_gift_btn.clicked.connect(self._send_gift)
+
         detail_layout.addWidget(icon_wrapper)
         detail_layout.addWidget(self.detail_name)
         detail_layout.addWidget(self.detail_info)
@@ -385,6 +395,7 @@ class MainWindow(QMainWindow):
         detail_layout.addWidget(self.sacrifice_btn)
         detail_layout.addWidget(self.repair_btn)
         detail_layout.addWidget(self.move_btn)
+        detail_layout.addWidget(self.send_gift_btn)
         detail_layout.addWidget(self.clone_to_storage_btn)
         detail_layout.addStretch()
 
@@ -446,6 +457,17 @@ class MainWindow(QMainWindow):
         )
         shop_btn.clicked.connect(self._open_token_shop)
         bar.addWidget(shop_btn)
+
+        self.receive_gift_btn = QToolButton()
+        self.receive_gift_btn.setText("📬 Receive Gift")
+        self.receive_gift_btn.setStyleSheet(
+            "QToolButton { font-size: 13px; font-weight: bold; padding: 2px 10px;"
+            " border: 1px solid #9c6fca; border-radius: 4px; background: #e8d4f5; color: #4a1d7a; }"
+            "QToolButton:hover { background: #d4bcea; }"
+            "QToolButton:pressed { background: #c0a8e0; }"
+        )
+        self.receive_gift_btn.clicked.connect(self._receive_gifts)
+        bar.addWidget(self.receive_gift_btn)
 
         # ── Right side: tokens + separator + gold ─────────────────────
         right_widget = QWidget()
@@ -573,6 +595,7 @@ class MainWindow(QMainWindow):
         self.sacrifice_btn.setVisible(False)
         self.repair_btn.setVisible(False)
         self.move_btn.setVisible(False)
+        self.send_gift_btn.setVisible(False)
         self.clone_to_storage_btn.setVisible(False)
 
     def _refresh_sacrifice_all_btn(self):
@@ -891,6 +914,7 @@ class MainWindow(QMainWindow):
             self.sacrifice_btn.setVisible(False)
             self.repair_btn.setVisible(False)
             self.move_btn.setVisible(False)
+            self.send_gift_btn.setVisible(False)
             self.clone_to_storage_btn.setVisible(
                 DEBUG_MODE and is_pool_tab and not is_locked
             )
@@ -908,6 +932,14 @@ class MainWindow(QMainWindow):
                     "🗑 Move to Trash" if current_tab == "Storage" else "📦 Move to Storage"
                 )
             self.move_btn.setVisible(not is_broken)
+
+            # Gift button — only for storage items that aren't broken
+            ctx = self.ctrl.get_gift_context()
+            if ctx["is_known_user"] and current_tab == "Storage" and not is_broken:
+                self.send_gift_btn.setText(f"🎁 Send to {ctx['recipient_name']}")
+                self.send_gift_btn.setVisible(True)
+            else:
+                self.send_gift_btn.setVisible(False)
 
     # ------------------------------------------------------------------
     # Multi-selection actions
@@ -1094,6 +1126,75 @@ class MainWindow(QMainWindow):
         if not self._confirm_if_save_changed():
             return
         self.ctrl.apply_clone_to_storage(self._selected_item_idx)
+
+    def _send_gift(self):
+        if self._selected_item_idx is None or self._selected_inv_key != "Storage":
+            return
+        if not self._confirm_if_save_changed():
+            return
+
+        ctx  = self.ctrl.get_gift_context()
+        item = self.ctrl.inventories["storage"].items[self._selected_item_idx]
+        name = (item.details or {}).get("name_resolved") or item.name or "?"
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("🎁 Envoyer un cadeau")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(
+            f"Envoyer <b>{name}</b> à <b>{ctx['recipient_name']}</b> ?<br><br>"
+            f"L'objet sera retiré de votre inventaire."
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.ctrl.apply_send_gift("storage", self._selected_item_idx)
+        except Exception as exc:
+            QMessageBox.critical(self, "Erreur", f"Impossible d'envoyer le cadeau :\n{exc}")
+            return
+
+        self._selected_item_idx = None
+        self._selected_btn = None
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._populate(self.ctrl.inv_items["Storage"])
+        QMessageBox.information(self, "Cadeau envoyé", f"<b>{name}</b> envoyé à {ctx['recipient_name']} !")
+
+    def _receive_gifts(self):
+        if not self._confirm_if_save_changed():
+            return
+
+        try:
+            received = self.ctrl.apply_receive_gifts()
+        except Exception as exc:
+            QMessageBox.critical(self, "Erreur", f"Impossible de recevoir les cadeaux :\n{exc}")
+            return
+
+        if not received:
+            QMessageBox.information(self, "Receive Gift", "Aucun cadeau en attente.")
+            return
+
+        # Refresh storage tab
+        current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
+        if current_tab == "Storage":
+            self._clear_grid()
+            self._clear_detail()
+            self._hide_all_action_btns()
+            self._populate(self.ctrl.inv_items["Storage"])
+        # Also keep inv_items in sync for other tabs
+        self.ctrl.inv_items["Storage"] = self.ctrl.inventories["storage"].items
+
+        names = [
+            (r.get("name") or "?") for r in received
+        ]
+        items_html = "<br>".join(f"• {n}" for n in names)
+        QMessageBox.information(
+            self, "Cadeaux reçus !",
+            f"<b>{len(received)}</b> objet(s) ajouté(s) au Storage :<br><br>{items_html}"
+        )
 
     # ------------------------------------------------------------------
     # UI helpers

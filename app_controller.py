@@ -292,3 +292,65 @@ class AppController:
         storage.count += 1
         self.save_inventories()
 
+    # ------------------------------------------------------------------
+    # Gift — send / receive via remote PostgreSQL
+    # ------------------------------------------------------------------
+
+    def get_gift_context(self) -> dict:
+        """Return a dict describing the current user's gift context.
+
+        Keys: my_id, recipient_id, my_name, recipient_name, is_known_user
+        """
+        from utils.gift_manager import get_steam_id_from_path, get_recipient_id, get_user_name
+        my_id        = get_steam_id_from_path(self.sav_path)
+        recipient_id = get_recipient_id(my_id) if my_id is not None else None
+        return {
+            "my_id":          my_id,
+            "recipient_id":   recipient_id,
+            "my_name":        get_user_name(my_id),
+            "recipient_name": get_user_name(recipient_id),
+            "is_known_user":  my_id is not None and recipient_id is not None,
+        }
+
+    def apply_send_gift(self, inv_key: str, idx: int) -> None:
+        """Serialize item, post it to the remote DB for the partner, remove locally."""
+        from utils.gift_manager import send_gift
+        ctx = self.get_gift_context()
+        if not ctx["is_known_user"]:
+            raise ValueError("Cannot determine gift recipient — save file user ID not recognized.")
+
+        inventory = self.inventories[inv_key]
+        raw       = inventory.raws[idx]
+
+        send_gift(raw, ctx["recipient_id"])
+
+        del inventory.raws[idx]
+        del inventory.items[idx]
+        inventory.count -= 1
+        self.save_inventories()
+
+    def apply_receive_gifts(self) -> list[dict]:
+        """Fetch all pending gifts, add them to storage, persist. Returns the raw items."""
+        from utils.gift_manager import receive_gifts, get_steam_id_from_path
+        my_id = get_steam_id_from_path(self.sav_path)
+        if my_id is None:
+            return []
+
+        raw_items = receive_gifts(my_id)
+        if not raw_items:
+            return []
+
+        storage = self.inventories["storage"]
+        for raw in raw_items:
+            new_seq_id = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
+            new_raw    = {**raw, "seqId": new_seq_id}
+            # Normalize subname key so it round-trips correctly
+            if "subname" in new_raw and "subName" not in new_raw:
+                new_raw["subName"] = new_raw.pop("subname")
+            storage.raws.append(new_raw)
+            storage.items.append(Item(new_raw))
+            storage.count += 1
+
+        self.save_inventories()
+        return raw_items
+

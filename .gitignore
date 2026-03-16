@@ -40,3 +40,4 @@ installer.iss
 *.exe
 *.ps1
 *.iss
+.env
