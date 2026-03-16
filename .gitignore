@@ -35,3 +35,5 @@ desktop.ini
 
 *.spec
 AGENTS.md
+build.ps1
+installer.iss
