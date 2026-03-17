@@ -448,7 +448,7 @@ class MainWindow(QMainWindow):
             "QToolButton:pressed { background: #ffb74d; }"
         )
         self.reload_btn.setStyleSheet(self._reload_btn_normal_style)
-        self.reload_btn.clicked.connect(lambda: self._reload(show_overlay=True))
+        self.reload_btn.clicked.connect(lambda: self._reload(show_overlay=False))
         bar.addWidget(self.reload_btn)
 
         self.save_date_label = QLabel(self.ctrl.get_save_date_str())
@@ -623,6 +623,7 @@ class MainWindow(QMainWindow):
 
     def _open_token_shop(self):
         from ui.token_shop import TokenShopDialog
+        self._poll_timer.stop()   # ignore our own writes during the shop session
         dialog = TokenShopDialog(
             self,
             tokens=self.ctrl.tokens,
@@ -631,9 +632,11 @@ class MainWindow(QMainWindow):
             sav_path=self.sav_path,
             inventories=self.ctrl.inventories,
             loaded_mtime=self.ctrl.loaded_mtime,
+            debug=DEBUG_MODE,
         )
         dialog.exec()
-        self._reload()
+        self._reload()            # sync loaded_mtime to whatever the shop wrote
+        self._poll_timer.start()  # resume external-change detection
 
     # ------------------------------------------------------------------
     # Save-change guard (UI dialog only)
