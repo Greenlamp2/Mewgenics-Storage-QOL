@@ -18,7 +18,7 @@ def build_inventory_blob(items):
 
         writer.u8(1)  # flag
         writer.str(item.get('name'))
-        writer.str(item.get('subName', ''))
+        writer.str(item.get('subname', ''))
 
         writer.i32(item.get('charges'))
         writer.u32(item.get('field1'))

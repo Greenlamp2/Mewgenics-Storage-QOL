@@ -291,7 +291,7 @@ class TokenShopDialog(QDialog):
     def _pool_count(self, rarity: str) -> int:
         return sum(
             1 for item in self.pool_items
-            if (item.details or {}).get("rarity") == rarity
+            if getattr(item, "rarity", None) == rarity
         )
 
     def _update_token_buttons(self):
@@ -341,7 +341,7 @@ class TokenShopDialog(QDialog):
     def _candidates(self, rarity: str) -> list[Item]:
         return [
             item for item in self.pool_items
-            if (item.details or {}).get("rarity") == rarity
+            if getattr(item, "rarity", None) == rarity
         ]
 
     def _pick_item(self, rarity: str, fallback: str | None = None):
