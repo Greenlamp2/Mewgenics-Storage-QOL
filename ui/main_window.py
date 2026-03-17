@@ -19,7 +19,7 @@ from version import APP_VERSION
 # mapping tab label → save_inventories key
 TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
 
-DEBUG_MODE = False   # passer à True pour activer les actions de debug (ex: Clone to Storage depuis Pool)
+DEBUG_MODE = True   # passer à True pour activer les actions de debug (ex: Clone to Storage depuis Pool)
 
 ICON_DIR    = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "img")
 MONEY_ICON  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "money.png")
@@ -624,13 +624,14 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_overlay") and self._overlay.isVisible():
             self._overlay.setGeometry(0, 0, self.width(), self.height())
 
+
     # ------------------------------------------------------------------
     # Token Shop
     # ------------------------------------------------------------------
 
     def _open_token_shop(self):
         from ui.token_shop import TokenShopDialog
-        self._poll_timer.stop()   # ignore our own writes during the shop session
+        self._poll_timer.stop()          # don't detect our own writes during the session
         dialog = TokenShopDialog(
             self,
             tokens=self.ctrl.tokens,
@@ -642,8 +643,8 @@ class MainWindow(QMainWindow):
             debug=DEBUG_MODE,
         )
         dialog.exec()
-        self._reload()            # sync loaded_mtime to whatever the shop wrote
-        self._poll_timer.start()  # resume external-change detection
+        self._reload()                   # sync loaded_mtime + refresh grid
+        self._poll_timer.start()         # resume external-change detection
 
     # ------------------------------------------------------------------
     # Save-change guard (UI dialog only)
