@@ -162,6 +162,23 @@ def send_gift(raw_item: dict, recipient_id: int) -> None:
         conn.close()
 
 
+def send_gifts_batch(raw_items: list[dict], recipient_id: int) -> None:
+    """Insert multiple items into the trade table in a single transaction."""
+    import psycopg2  # noqa: PLC0415
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        for raw in raw_items:
+            blob = serialize_item(raw)
+            cur.execute(
+                "INSERT INTO trade (user_id, blob) VALUES (%s, %s)",
+                (recipient_id, blob),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def receive_gifts(my_steam_id: int) -> list[dict]:
     """Claim all pending rows for my_steam_id, delete them, and return raw items."""
     conn = _get_connection()

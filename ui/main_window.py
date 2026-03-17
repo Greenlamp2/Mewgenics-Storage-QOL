@@ -315,6 +315,13 @@ class MainWindow(QMainWindow):
         ms_trash_btn.clicked.connect(self._move_selected_to_trash)
         ms_layout.addWidget(ms_trash_btn)
 
+        self.ms_gift_btn = QPushButton("🎁 Send Gift")
+        self.ms_gift_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #6a3d9a; }"
+                                        "QPushButton:hover { background: #5a2d8a; }")
+        self.ms_gift_btn.setVisible(False)
+        self.ms_gift_btn.clicked.connect(self._send_gift_selected)
+        ms_layout.addWidget(self.ms_gift_btn)
+
         ms_clear_btn = QPushButton("✕")
         ms_clear_btn.setFixedWidth(28)
         ms_clear_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #333; }"
@@ -934,6 +941,16 @@ class MainWindow(QMainWindow):
             self.multi_select_count_lbl.setText(
                 f"{n} item{'s' if n != 1 else ''} selected  (Ctrl+click to add/remove)"
             )
+            # Show gift button only when gift is configured
+            try:
+                ctx = self.ctrl.get_gift_context()
+                if ctx.get("is_known_user"):
+                    self.ms_gift_btn.setText(f"🎁 Send to {ctx['recipient_name']}")
+                    self.ms_gift_btn.setVisible(True)
+                else:
+                    self.ms_gift_btn.setVisible(False)
+            except Exception:
+                self.ms_gift_btn.setVisible(False)
 
     def _clear_multi_selection(self):
         for btn in self._multi_selection.values():
@@ -1114,6 +1131,55 @@ class MainWindow(QMainWindow):
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
         self._populate(self.ctrl.inv_items["Storage"])
+
+    def _send_gift_selected(self):
+        if not self._multi_selection:
+            return
+        if not self._confirm_if_save_changed():
+            return
+
+        ctx = self.ctrl.get_gift_context()
+        if not ctx.get("is_known_user"):
+            QMessageBox.warning(self, "Erreur", "Impossible de déterminer le destinataire du cadeau.")
+            return
+
+        indices    = sorted(self._multi_selection.keys())
+        storage    = self.ctrl.inventories["storage"]
+        item_names = [
+            ((storage.items[i].details or {}).get("name_resolved") or storage.items[i].name or "?")
+            for i in indices
+        ]
+        items_html = "<br>".join(f"• {n}" for n in item_names)
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("🎁 Envoyer des cadeaux")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(
+            f"Envoyer <b>{len(indices)} item(s)</b> à "
+            f"<b>{ctx['recipient_name']}</b> ?<br><br>"
+            f"{items_html}<br><br>"
+            "Ces objets seront retirés de votre inventaire."
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            count = self.ctrl.apply_send_gift_multiple(indices)
+        except Exception as exc:
+            QMessageBox.critical(self, "Erreur", f"Impossible d'envoyer les cadeaux :\n{exc}")
+            return
+
+        self._clear_multi_selection()
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._populate(self.ctrl.inv_items["Storage"])
+        QMessageBox.information(
+            self, "Cadeaux envoyés",
+            f"<b>{count}</b> objet(s) envoyé(s) à {ctx['recipient_name']} !"
+        )
 
     # ------------------------------------------------------------------
     # Single-item actions
@@ -1298,6 +1364,8 @@ class MainWindow(QMainWindow):
             self._populate(self.ctrl.inv_items["Storage"])
         # Also keep inv_items in sync for other tabs
         self.ctrl.inv_items["Storage"] = self.ctrl.inventories["storage"].items
+        # Refresh pool tab title in case new items were discovered via the gift
+        self._refresh_pool_tab_title()
 
         names = [
             (r.get("name") or "?") for r in received

@@ -329,8 +329,28 @@ class AppController:
         inventory.count -= 1
         self.save_inventories()
 
+    def apply_send_gift_multiple(self, indices: list[int]) -> int:
+        """Send multiple storage items as gifts in one DB transaction. Returns count sent."""
+        from utils.gift_manager import send_gifts_batch
+        ctx = self.get_gift_context()
+        if not ctx["is_known_user"]:
+            raise ValueError("Cannot determine gift recipient — save file user ID not recognized.")
+
+        storage      = self.inventories["storage"]
+        raws_to_send = [storage.raws[idx] for idx in indices]
+
+        send_gifts_batch(raws_to_send, ctx["recipient_id"])
+
+        for idx in sorted(indices, reverse=True):
+            del storage.raws[idx]
+            del storage.items[idx]
+            storage.count -= 1
+
+        self.save_inventories()
+        return len(indices)
+
     def apply_receive_gifts(self) -> list[dict]:
-        """Fetch all pending gifts, add them to storage, persist. Returns the raw items."""
+        """Fetch all pending gifts, add them to storage and pool, persist. Returns the raw items."""
         from utils.gift_manager import receive_gifts, get_steam_id_from_path
         my_id = get_steam_id_from_path(self.sav_path)
         if my_id is None:
@@ -340,7 +360,9 @@ class AppController:
         if not raw_items:
             return []
 
-        storage = self.inventories["storage"]
+        storage      = self.inventories["storage"]
+        pool_changed = False
+
         for raw in raw_items:
             new_seq_id = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
             new_raw    = {**raw, "seqId": new_seq_id}
@@ -351,6 +373,29 @@ class AppController:
             storage.items.append(Item(new_raw))
             storage.count += 1
 
+            # Add to pool if not already discovered (same rule as load_data)
+            name = new_raw.get("name")
+            if name and name not in self.items_pool:
+                self.items_pool[name] = new_raw
+                pool_changed = True
+
         self.save_inventories()
+
+        if pool_changed:
+            save_items_pool(self.items_pool)
+            # Rebuild in-memory pool so the UI reflects the new discoveries immediately
+            self.pool_items = [Item(r) for r in self.items_pool.values()]
+            discovered_names = set(self.items_pool.keys())
+            all_catalog = item_catalog.get_all_non_quest_items()
+            self.undiscovered_pool_items = [
+                GhostItem(name, details)
+                for name, details in all_catalog.items()
+                if name not in discovered_names
+                and details is not None
+                and details.get("rarity") not in EXCLUDED_RARITIES
+                and details.get("rarity") is not None
+            ]
+            self.inv_items["Pool"] = self.pool_items + self.undiscovered_pool_items
+
         return raw_items
 

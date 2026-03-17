@@ -41,3 +41,4 @@ installer.iss
 *.ps1
 *.iss
 .env
+.keep
