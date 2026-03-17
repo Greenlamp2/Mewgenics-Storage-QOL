@@ -448,7 +448,7 @@ class MainWindow(QMainWindow):
             "QToolButton:pressed { background: #ffb74d; }"
         )
         self.reload_btn.setStyleSheet(self._reload_btn_normal_style)
-        self.reload_btn.clicked.connect(self._reload)
+        self.reload_btn.clicked.connect(lambda: self._reload(show_overlay=True))
         bar.addWidget(self.reload_btn)
 
         self.save_date_label = QLabel(self.ctrl.get_save_date_str())
@@ -665,12 +665,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _check_save_updated(self):
-        """Auto-reload silently when the save file changes on disk."""
+        """Auto-reload when the save file changes on disk (external change = game saved)."""
         changed, _, _ = self.ctrl.check_save_changed()
         if changed:
-            self._reload()
+            self._reload(show_overlay=True)
 
-    def _reload(self):
+    def _reload(self, show_overlay: bool = False):
         current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
         self.ctrl.load_data()
         self.reload_btn.setText("↺ Reload")
@@ -685,7 +685,8 @@ class MainWindow(QMainWindow):
         self._refresh_sacrifice_all_btn()
         self._refresh_pool_tab_title()
         self._populate(self.ctrl.inv_items[current_tab])
-        self._show_overlay()
+        if show_overlay:
+            self._show_overlay()
 
     def _hide_all_action_btns(self):
         self.sacrifice_btn.setVisible(False)

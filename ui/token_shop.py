@@ -17,7 +17,7 @@ TOKENS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", 
 
 RARITIES_IN_SHOP = ("common", "uncommon", "rare", "very_rare")
 RARITY_UPGRADE   = {"common": "uncommon", "uncommon": "rare", "rare": None, "very_rare": None}
-UPGRADE_CHANCE   = 0.01
+UPGRADE_CHANCE   = 0.03
 MAX_REROLLS      = 3
 POOL_REQUIRED = {
     "common":    20,
@@ -209,7 +209,7 @@ class TokenShopDialog(QDialog):
         title.setStyleSheet("font-size: 22px; font-weight: bold;")
         layout.addWidget(title)
 
-        subtitle = QLabel("Spend 3 tokens · 1 % chance to receive the rarity above")
+        subtitle = QLabel("Spend 3 tokens · 3 % chance to receive the rarity above")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet("color: #777; font-size: 12px;")
         layout.addWidget(subtitle)
