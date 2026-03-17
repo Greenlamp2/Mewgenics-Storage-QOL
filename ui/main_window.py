@@ -198,7 +198,10 @@ class MainWindow(QMainWindow):
         self.ctrl.load_data()
         self._build_ui()
         self._build_gold_bar()
+        self._build_overlay()
+        self._refresh_pool_tab_title()
         self._populate(self.ctrl.inv_items["Storage"])
+        QTimer.singleShot(0, self._show_overlay)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -520,6 +523,88 @@ class MainWindow(QMainWindow):
         bar.addPermanentWidget(right_widget)
 
     # ------------------------------------------------------------------
+    # Overlay — "go to main menu" screen
+    # ------------------------------------------------------------------
+
+    def _build_overlay(self):
+        """Create the full-window overlay shown after every save load."""
+        self._overlay = QWidget(self)
+        self._overlay.setObjectName("overlay")
+        self._overlay.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._overlay.setStyleSheet(
+            "QWidget#overlay { background: rgba(10, 10, 20, 200); }"
+        )
+
+        outer = QVBoxLayout(self._overlay)
+        outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: #1a1a2e; border: 2px solid #4a9eff;"
+            " border-radius: 14px; }"
+        )
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(40, 32, 40, 32)
+        card_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.setSpacing(16)
+
+        icon_lbl = QLabel("💾")
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_lbl.setStyleSheet(
+            "QLabel { font-size: 52px; background: transparent; border: none; }"
+        )
+
+        msg_lbl = QLabel()
+        msg_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg_lbl.setTextFormat(Qt.TextFormat.RichText)
+        msg_lbl.setWordWrap(True)
+        msg_lbl.setStyleSheet(
+            "QLabel { color: #d0d8ff; font-size: 15px;"
+            " background: transparent; border: none; }"
+        )
+        msg_lbl.setText(
+            "<span style='font-size:20px; font-weight:bold; color:#4a9eff;'>"
+            "Save file loaded</span><br><br>"
+            "Please return to the <b>Main Menu</b> and click <b>Continue</b><br>"
+            "to load the latest state, then come back here."
+        )
+
+        continue_btn = QPushButton("✓  I'm on the Main Menu — Continue")
+        continue_btn.setFixedWidth(320)
+        continue_btn.setStyleSheet(
+            "QPushButton { font-size: 14px; font-weight: bold; padding: 12px 24px;"
+            " background: #4a9eff; color: white; border: none; border-radius: 7px; }"
+            "QPushButton:hover   { background: #3a8eef; }"
+            "QPushButton:pressed { background: #2272cc; }"
+        )
+        continue_btn.clicked.connect(self._dismiss_overlay)
+
+        card_layout.addWidget(icon_lbl)
+        card_layout.addWidget(msg_lbl)
+        card_layout.addSpacing(8)
+        card_layout.addWidget(continue_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        outer.addWidget(card)
+
+        self._overlay.hide()
+        self._overlay.raise_()
+
+    def _show_overlay(self):
+        """Resize and show the overlay on top of everything."""
+        self._overlay.setGeometry(0, 0, self.width(), self.height())
+        self._overlay.raise_()
+        self._overlay.show()
+
+    def _dismiss_overlay(self):
+        """Hide the overlay so the user can interact with the app."""
+        self._overlay.hide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_overlay") and self._overlay.isVisible():
+            self._overlay.setGeometry(0, 0, self.width(), self.height())
+
+    # ------------------------------------------------------------------
     # Token Shop
     # ------------------------------------------------------------------
 
@@ -567,17 +652,13 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _check_save_updated(self):
-        """Highlight the Reload button when a newer save file is detected."""
+        """Auto-reload silently when the save file changes on disk."""
         changed, _, _ = self.ctrl.check_save_changed()
         if changed:
-            self.reload_btn.setText("↺ Reload  ⚠ New save!")
-            self.reload_btn.setStyleSheet(self._reload_btn_alert_style)
-        else:
-            self.reload_btn.setText("↺ Reload")
-            self.reload_btn.setStyleSheet(self._reload_btn_normal_style)
+            self._reload()
 
     def _reload(self):
-        current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
+        current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
         self.ctrl.load_data()
         self.reload_btn.setText("↺ Reload")
         self.reload_btn.setStyleSheet(self._reload_btn_normal_style)
@@ -589,7 +670,9 @@ class MainWindow(QMainWindow):
         self._clear_detail()
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
+        self._refresh_pool_tab_title()
         self._populate(self.ctrl.inv_items[current_tab])
+        self._show_overlay()
 
     def _hide_all_action_btns(self):
         self.sacrifice_btn.setVisible(False)
@@ -599,13 +682,26 @@ class MainWindow(QMainWindow):
         self.clone_to_storage_btn.setVisible(False)
 
     def _refresh_sacrifice_all_btn(self):
-        current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
+        current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
         non_broken = [
             it for it in self.ctrl.inventories["trash"].items
             if not getattr(it, "broken", False)
         ]
         visible = current_tab == "Trash" and len(non_broken) > 0
         self.sacrifice_all_btn.setVisible(visible)
+
+    def _tab_key(self, text: str) -> str:
+        """Return the base key from a tab label, stripping any '  N/M' suffix."""
+        return text.split("  ")[0]
+
+    def _refresh_pool_tab_title(self):
+        """Update the Pool tab label with discovered/total counts."""
+        discovered = len(self.ctrl.pool_items)
+        total = discovered + len(self.ctrl.undiscovered_pool_items)
+        for i in range(self.tab_bar.count()):
+            if self.tab_bar.tabText(i).startswith("Pool"):
+                self.tab_bar.setTabText(i, f"Pool  {discovered}/{total}")
+                break
 
     # ------------------------------------------------------------------
     # Tab switching
@@ -619,7 +715,7 @@ class MainWindow(QMainWindow):
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
         self._refresh_multi_bar()
-        label = self.tab_bar.tabText(index)
+        label = self._tab_key(self.tab_bar.tabText(index))
         self._populate(self.ctrl.inv_items[label])
 
     def _clear_grid(self):
@@ -646,7 +742,7 @@ class MainWindow(QMainWindow):
         base, active = self._sort_btn_styles
         for k, btn in self._sort_btns.items():
             btn.setStyleSheet(active if k == key else base)
-        label = self.tab_bar.tabText(self.tab_bar.currentIndex())
+        label = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
         self._clear_grid()
         self._populate(self.ctrl.inv_items[label])
 
@@ -814,7 +910,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_multi_bar(self):
         n          = len(self._multi_selection)
-        in_storage = self.tab_bar.tabText(self.tab_bar.currentIndex()) == "Storage"
+        in_storage = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex())) == "Storage"
         visible    = n > 0 and in_storage
         self.multi_select_bar.setVisible(visible)
         if visible:
@@ -834,7 +930,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_select(self, idx: int, btn: QToolButton, items, multi: bool = False):
-        current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
+        current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
 
         # ── Ctrl+Click in Storage → toggle multi-selection ────────────
         if multi and current_tab == "Storage":
@@ -1177,7 +1273,7 @@ class MainWindow(QMainWindow):
             return
 
         # Refresh storage tab
-        current_tab = self.tab_bar.tabText(self.tab_bar.currentIndex())
+        current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
         if current_tab == "Storage":
             self._clear_grid()
             self._clear_detail()
