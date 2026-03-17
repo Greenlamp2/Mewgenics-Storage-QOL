@@ -37,10 +37,21 @@ USER_NAMES: dict[int, str] = {
 # ---------------------------------------------------------------------------
 
 def _load_dotenv() -> None:
-    """Minimal .env parser — loads variables into os.environ if not already set."""
-    env_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"
-    )
+    """Minimal .env parser — loads variables into os.environ if not already set.
+
+    Search order:
+    1. Frozen (PyInstaller) exe  → same folder as the .exe
+    2. Development               → project root (one level above utils/)
+    """
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        # Running as a PyInstaller bundle: look next to the exe
+        base_dir = os.path.dirname(_sys.executable)
+    else:
+        # Running from source: look at the project root
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    env_path = os.path.join(base_dir, ".env")
     if not os.path.exists(env_path):
         return
     with open(env_path, encoding="utf-8") as fh:
