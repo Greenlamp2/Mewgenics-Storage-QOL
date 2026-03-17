@@ -28,19 +28,32 @@ GRID_COLS = 7
 ICON_SIZE = 56
 
 RARITY_COLORS = {
-    "common":    "#aaaaaa",
-    "uncommon":  "#55aa55",
-    "rare":      "#5588ff",
-    "very_rare": "#ffaa00",
+    "common":               "#d0d0d0",
+    "uncommon":             "#888888",
+    "rare":                 "#c8a830",
+    "very_rare":            "#c04040",
+    "consumable_common":    "#d0d0d0",
+    "consumable_uncommon":  "#888888",
+    "consumable_rare":      "#c8a830",
+    "consumable_very_rare": "#c04040",
 }
 RARITY_BG = {
-    "common":    "rgba(150, 150, 150, 0.30)",
-    "uncommon":  "rgba(85,  170,  85, 0.30)",
-    "rare":      "rgba(85,  136, 255, 0.30)",
-    "very_rare": "rgba(255, 170,   0, 0.35)",
+    "common":               "rgba(208, 208, 208, 0.18)",
+    "uncommon":             "rgba(136, 136, 136, 0.25)",
+    "rare":                 "rgba(200, 168, 48,  0.25)",
+    "very_rare":            "rgba(192,  64, 64,  0.28)",
+    "consumable_common":    "rgba(208, 208, 208, 0.18)",
+    "consumable_uncommon":  "rgba(136, 136, 136, 0.25)",
+    "consumable_rare":      "rgba(200, 168, 48,  0.25)",
+    "consumable_very_rare": "rgba(192,  64, 64,  0.28)",
 }
 
-RARITY_ORDER = {"common": 0, "uncommon": 1, "rare": 2, "very_rare": 3}
+RARITY_ORDER = {
+    "common": 0, "consumable_common": 0,
+    "uncommon": 1, "consumable_uncommon": 1,
+    "rare": 2, "consumable_rare": 2,
+    "very_rare": 3, "consumable_very_rare": 3,
+}
 SORT_KEYS    = ("default", "name", "rarity", "category")
 
 # Cell size used both by QGridLayout items and VirtualItemGrid

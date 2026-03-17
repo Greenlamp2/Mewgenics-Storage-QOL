@@ -27,16 +27,24 @@ POOL_REQUIRED = {
 }
 
 RARITY_COLORS = {
-    "common":    "#c0c0c0",
-    "uncommon":  "#4caf50",
-    "rare":      "#4d90fe",
-    "very_rare": "#ffb300",
+    "common":               "#d0d0d0",
+    "uncommon":             "#888888",
+    "rare":                 "#c8a830",
+    "very_rare":            "#c04040",
+    "consumable_common":    "#d0d0d0",
+    "consumable_uncommon":  "#888888",
+    "consumable_rare":      "#c8a830",
+    "consumable_very_rare": "#c04040",
 }
 RARITY_BG = {
-    "common":    "#2a2a2a",
-    "uncommon":  "#0d2b0d",
-    "rare":      "#0a1a3a",
-    "very_rare": "#2b1a00",
+    "common":               "#262626",
+    "uncommon":             "#222222",
+    "rare":                 "#262400",
+    "very_rare":            "#260808",
+    "consumable_common":    "#262626",
+    "consumable_uncommon":  "#222222",
+    "consumable_rare":      "#262400",
+    "consumable_very_rare": "#260808",
 }
 RARITY_LABEL = {
     "common":    "Common",
