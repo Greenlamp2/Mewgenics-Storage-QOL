@@ -434,7 +434,7 @@ class LootboxDialog(QDialog):
 
         # Counter / instructions
         self.counter_lbl = QLabel(
-            f"Choisissez {MAX_PICKS} objets  —  0 / {MAX_PICKS} sélectionné(s)"
+            f"Choose {MAX_PICKS} items  —  0 / {MAX_PICKS} selected"
         )
         self.counter_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.counter_lbl.setStyleSheet("color: #aaa; font-size: 13px; font-weight: bold;")
@@ -462,7 +462,7 @@ class LootboxDialog(QDialog):
         vbox.addWidget(self.summary_lbl)
 
         # Confirm button
-        self.confirm_btn = QPushButton(f"➕  Ajouter {MAX_PICKS} objets au Storage")
+        self.confirm_btn = QPushButton(f"➕  Add {MAX_PICKS} items to Storage")
         self.confirm_btn.setEnabled(False)
         self.confirm_btn.setStyleSheet(
             "QPushButton { font-size: 14px; font-weight: bold; padding: 10px 24px;"
@@ -493,7 +493,7 @@ class LootboxDialog(QDialog):
         n     = len(self.selected_indices)
         color = "#4caf50" if n == MAX_PICKS else "#aaa"
         self.counter_lbl.setText(
-            f"Choisissez {MAX_PICKS} objets  —  {n} / {MAX_PICKS} sélectionné(s)"
+            f"Choose {MAX_PICKS} items  —  {n} / {MAX_PICKS} selected"
         )
         self.counter_lbl.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: bold;")
 
@@ -504,7 +504,7 @@ class LootboxDialog(QDialog):
                 for i in sorted(self.selected_indices)
             ]
             self.summary_lbl.setText(
-                "Sélectionnés : " + "  •  ".join(f"<b>{n}</b>" for n in names)
+                "Selected: " + "  •  ".join(f"<b>{n}</b>" for n in names)
             )
         else:
             self.summary_lbl.clear()
@@ -529,10 +529,10 @@ class LootboxDialog(QDialog):
             import datetime as _dt
             date_str = _dt.datetime.fromtimestamp(current_mtime).strftime("%Y-%m-%d  %H:%M:%S")
             reply = QMessageBox.warning(
-                self, "⚠ Sauvegarde plus récente détectée",
-                f"La sauvegarde a été modifiée depuis le chargement.\n\n"
-                f"Date du fichier : {date_str}\n\n"
-                f"Continuer va écraser cette version plus récente.",
+                self, "⚠ Newer Save Detected",
+                f"The save file has been modified since it was loaded.\n\n"
+                f"File date: {date_str}\n\n"
+                f"Continuing will overwrite this newer version.",
                 QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
@@ -593,8 +593,8 @@ class TokenShopDialog(QDialog):
         vbox.addWidget(title)
 
         subtitle = QLabel(
-            f"Dépensez {TOKEN_COST} tokens identiques pour ouvrir une Lootbox.\n"
-            f"Choisissez ensuite {MAX_PICKS} objets parmi {ITEMS_PER_LOOTBOX} proposés."
+            f"Spend {TOKEN_COST} identical tokens to open a Lootbox.\n"
+            f"Then choose {MAX_PICKS} items from the {ITEMS_PER_LOOTBOX} offered."
         )
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet("color: #666; font-size: 12px;")
@@ -623,7 +623,7 @@ class TokenShopDialog(QDialog):
         tl.setContentsMargins(16, 12, 16, 12)
         tl.setSpacing(5)
 
-        hdr = QLabel("Distribution des raretés par tier de Lootbox")
+        hdr = QLabel("Rarity distribution per Lootbox tier")
         hdr.setStyleSheet("color: #666; font-size: 11px; font-weight: bold;")
         tl.addWidget(hdr)
 
@@ -681,8 +681,8 @@ class TokenShopDialog(QDialog):
         label = RARITY_LABEL.get(rarity, rarity.capitalize())
         reply = QMessageBox.question(
             self,
-            "Ouvrir une Lootbox",
-            f"Dépenser {TOKEN_COST} tokens {label} pour ouvrir une Lootbox {label} ?",
+            "Open a Lootbox",
+            f"Spend {TOKEN_COST} {label} tokens to open a {label} Lootbox?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:

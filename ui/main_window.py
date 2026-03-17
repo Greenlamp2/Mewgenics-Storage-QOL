@@ -19,7 +19,7 @@ from version import APP_VERSION
 # mapping tab label → save_inventories key
 TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
 
-DEBUG_MODE = True   # passer à True pour activer les actions de debug (ex: Clone to Storage depuis Pool)
+DEBUG_MODE = True   # set to True to enable debug actions (e.g.: Clone to Storage from Pool)
 
 ICON_DIR    = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "img")
 MONEY_ICON  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "money.png")
@@ -658,17 +658,17 @@ class MainWindow(QMainWindow):
             return True
 
         msg = QMessageBox(self)
-        msg.setWindowTitle("⚠ Sauvegarde plus récente détectée")
+        msg.setWindowTitle("⚠ Newer Save Detected")
         msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setText(
-            f"La sauvegarde a été modifiée depuis le dernier chargement.<br><br>"
-            f"<b>Date du fichier :</b> {date_str}<br><br>"
-            f"Continuer va <b>écraser</b> cette version plus récente.<br>"
-            f"Il est recommandé de faire un <b>Reload</b> d'abord."
+            f"The save file has been modified since it was last loaded.<br><br>"
+            f"<b>File date:</b> {date_str}<br><br>"
+            f"Continuing will <b>overwrite</b> this newer version.<br>"
+            f"It is recommended to <b>Reload</b> first."
         )
         msg.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
         msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
-        msg.button(QMessageBox.StandardButton.Ok).setText("Écraser quand même")
+        msg.button(QMessageBox.StandardButton.Ok).setText("Overwrite anyway")
         return msg.exec() == QMessageBox.StandardButton.Ok
 
     # ------------------------------------------------------------------
@@ -1092,11 +1092,11 @@ class MainWindow(QMainWindow):
             for r, count in gains.items()
         ]
         msg = QMessageBox(self)
-        msg.setWindowTitle("Sacrifice la sélection")
+        msg.setWindowTitle("Sacrifice Selection")
         msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setText(
-            f"Sacrifier <b>{len(indices)} item(s)</b> ?<br><br>"
-            f"Vous allez gagner :<br>" + "<br>".join(lines)
+            f"Sacrifice <b>{len(indices)} item(s)</b>?<br><br>"
+            f"You will receive:<br>" + "<br>".join(lines)
         )
         msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
         msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
@@ -1118,8 +1118,8 @@ class MainWindow(QMainWindow):
             return
         indices = sorted(self._multi_selection.keys(), reverse=True)
         msg = QMessageBox(self)
-        msg.setWindowTitle("Déplacer vers Trash")
-        msg.setText(f"Déplacer <b>{len(indices)} item(s)</b> vers le Trash ?")
+        msg.setWindowTitle("Move to Trash")
+        msg.setText(f"Move <b>{len(indices)} item(s)</b> to Trash?")
         msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
         msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
@@ -1141,7 +1141,7 @@ class MainWindow(QMainWindow):
 
         ctx = self.ctrl.get_gift_context()
         if not ctx.get("is_known_user"):
-            QMessageBox.warning(self, "Erreur", "Impossible de déterminer le destinataire du cadeau.")
+            QMessageBox.warning(self, "Error", "Could not determine the gift recipient.")
             return
 
         indices    = sorted(self._multi_selection.keys())
@@ -1153,13 +1153,13 @@ class MainWindow(QMainWindow):
         items_html = "<br>".join(f"• {n}" for n in item_names)
 
         msg = QMessageBox(self)
-        msg.setWindowTitle("🎁 Envoyer des cadeaux")
+        msg.setWindowTitle("🎁 Send Gifts")
         msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setText(
-            f"Envoyer <b>{len(indices)} item(s)</b> à "
-            f"<b>{ctx['recipient_name']}</b> ?<br><br>"
+            f"Send <b>{len(indices)} item(s)</b> to "
+            f"<b>{ctx['recipient_name']}</b>?<br><br>"
             f"{items_html}<br><br>"
-            "Ces objets seront retirés de votre inventaire."
+            "These items will be removed from your inventory."
         )
         msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
         msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
@@ -1169,7 +1169,7 @@ class MainWindow(QMainWindow):
         try:
             count = self.ctrl.apply_send_gift_multiple(indices)
         except Exception as exc:
-            QMessageBox.critical(self, "Erreur", f"Impossible d'envoyer les cadeaux :\n{exc}")
+            QMessageBox.critical(self, "Error", f"Failed to send gifts:\n{exc}")
             return
 
         self._clear_multi_selection()
@@ -1178,8 +1178,8 @@ class MainWindow(QMainWindow):
         self._hide_all_action_btns()
         self._populate(self.ctrl.inv_items["Storage"])
         QMessageBox.information(
-            self, "Cadeaux envoyés",
-            f"<b>{count}</b> objet(s) envoyé(s) à {ctx['recipient_name']} !"
+            self, "Gifts Sent",
+            f"<b>{count}</b> item(s) sent to {ctx['recipient_name']}!"
         )
 
     # ------------------------------------------------------------------
@@ -1234,8 +1234,8 @@ class MainWindow(QMainWindow):
         msg.setWindowTitle("Sacrifice All")
         msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setText(
-            "Voulez-vous vraiment sacrifier tous les objets non-brisés du Trash ?<br><br>"
-            "Vous allez gagner :<br>" + "<br>".join(lines)
+            "Sacrifice all non-broken items in the Trash?<br><br>"
+            "You will receive:<br>" + "<br>".join(lines)
         )
         msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
         msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
@@ -1265,24 +1265,24 @@ class MainWindow(QMainWindow):
 
         if not info["can_afford"]:
             msg = QMessageBox(self)
-            msg.setWindowTitle("Réparation impossible")
+            msg.setWindowTitle("Cannot Repair")
             msg.setTextFormat(Qt.TextFormat.RichText)
             msg.setText(
-                f"Pas assez de tokens pour réparer cet objet.<br><br>"
-                f'Coût : <span style="color:{color}"><b>{info["cost"]}× {rarity_label} token</b></span><br>'
-                f'Disponible : <span style="color:{color}"><b>{info["available"]}</b></span>'
+                f"Not enough tokens to repair this item.<br><br>"
+                f'Cost: <span style="color:{color}"><b>{info["cost"]}× {rarity_label} token</b></span><br>'
+                f'Available: <span style="color:{color}"><b>{info["available"]}</b></span>'
             )
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg.exec()
             return
 
         msg = QMessageBox(self)
-        msg.setWindowTitle("Réparer l'objet")
+        msg.setWindowTitle("Repair Item")
         msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setText(
-            f'Réparer <b>{info["display_name"]}</b> et le déplacer vers le Storage ?<br><br>'
-            f'Coût : <span style="color:{color}"><b>{info["cost"]}× {rarity_label} token</b></span>'
-            f' (vous en avez <b>{info["available"]}</b>)'
+            f'Repair <b>{info["display_name"]}</b> and move it to Storage?<br><br>'
+            f'Cost: <span style="color:{color}"><b>{info["cost"]}× {rarity_label} token</b></span>'
+            f' (you have <b>{info["available"]}</b>)'
         )
         msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
         msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
@@ -1317,11 +1317,11 @@ class MainWindow(QMainWindow):
         name = (item.details or {}).get("name_resolved") or item.name or "?"
 
         msg = QMessageBox(self)
-        msg.setWindowTitle("🎁 Envoyer un cadeau")
+        msg.setWindowTitle("🎁 Send Gift")
         msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setText(
-            f"Envoyer <b>{name}</b> à <b>{ctx['recipient_name']}</b> ?<br><br>"
-            f"L'objet sera retiré de votre inventaire."
+            f"Send <b>{name}</b> to <b>{ctx['recipient_name']}</b>?<br><br>"
+            f"The item will be removed from your inventory."
         )
         msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
         msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
@@ -1331,7 +1331,7 @@ class MainWindow(QMainWindow):
         try:
             self.ctrl.apply_send_gift("storage", self._selected_item_idx)
         except Exception as exc:
-            QMessageBox.critical(self, "Erreur", f"Impossible d'envoyer le cadeau :\n{exc}")
+            QMessageBox.critical(self, "Error", f"Failed to send gift:\n{exc}")
             return
 
         self._selected_item_idx = None
@@ -1340,7 +1340,7 @@ class MainWindow(QMainWindow):
         self._clear_detail()
         self._hide_all_action_btns()
         self._populate(self.ctrl.inv_items["Storage"])
-        QMessageBox.information(self, "Cadeau envoyé", f"<b>{name}</b> envoyé à {ctx['recipient_name']} !")
+        QMessageBox.information(self, "Gift Sent", f"<b>{name}</b> sent to {ctx['recipient_name']}!")
 
     def _receive_gifts(self):
         if not self._confirm_if_save_changed():
@@ -1349,11 +1349,11 @@ class MainWindow(QMainWindow):
         try:
             received = self.ctrl.apply_receive_gifts()
         except Exception as exc:
-            QMessageBox.critical(self, "Erreur", f"Impossible de recevoir les cadeaux :\n{exc}")
+            QMessageBox.critical(self, "Error", f"Failed to receive gifts:\n{exc}")
             return
 
         if not received:
-            QMessageBox.information(self, "Receive Gift", "Aucun cadeau en attente.")
+            QMessageBox.information(self, "Receive Gift", "No pending gifts.")
             return
 
         # Refresh storage tab
@@ -1373,8 +1373,8 @@ class MainWindow(QMainWindow):
         ]
         items_html = "<br>".join(f"• {n}" for n in names)
         QMessageBox.information(
-            self, "Cadeaux reçus !",
-            f"<b>{len(received)}</b> objet(s) ajouté(s) au Storage :<br><br>{items_html}"
+            self, "Gifts Received!",
+            f"<b>{len(received)}</b> item(s) added to Storage:<br><br>{items_html}"
         )
 
     # ------------------------------------------------------------------

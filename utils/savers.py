@@ -109,7 +109,7 @@ def save_tokens(tokens: dict, save_mtime: float):
 
 
 def add_item_to_pool(raw):
-    """Ajoute l'item au pool si son nom n'existe pas déjà. Retourne True si ajouté."""
+    """Add the item to the pool if its name does not already exist. Returns True if added."""
     from utils.loaders import load_items_pool
     name = raw.get("name")
     if not name:
@@ -125,7 +125,7 @@ def add_item_to_pool(raw):
 
 
 def remove_from_pool(name):
-    """Retire l'item du pool par son nom. Retourne True si supprimé."""
+    """Remove the item from the pool by name. Returns True if removed."""
     from utils.loaders import load_items_pool
     pool = load_items_pool()
     if name not in pool:
