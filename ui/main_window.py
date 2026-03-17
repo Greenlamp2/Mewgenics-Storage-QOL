@@ -1019,8 +1019,7 @@ class MainWindow(QMainWindow):
         self._selected_btn = None
         self._clear_grid()
         self._clear_detail()
-        self.sacrifice_btn.setVisible(False)
-        self.move_btn.setVisible(False)
+        self._hide_all_action_btns()
         self._populate(self.ctrl.inv_items[origin_tab])
 
     def _move_item(self):
