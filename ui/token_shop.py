@@ -9,8 +9,9 @@ The player then picks MAX_PICKS items to add to their storage.
 import os
 import random
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer, QPropertyAnimation, QEasingCurve, QUrl
 from PySide6.QtGui import QPixmap, QPainter
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from parse.item import Item
+from utils.paths import resource_path
 from utils.savers import save_inventories, save_tokens
 
 ICON_DIR   = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "img")
@@ -26,8 +28,8 @@ TOKENS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", 
 
 RARITIES_IN_SHOP = ("common", "uncommon", "rare", "very_rare")
 TOKEN_COST        = 5
-ITEMS_PER_LOOTBOX = 8
-MAX_PICKS         = 2
+ITEMS_PER_LOOTBOX = 12
+MAX_PICKS         = 3
 
 # Per-rarity probability table for items INSIDE each lootbox tier
 LOOT_DISTRIBUTIONS: dict[str, dict[str, float]] = {
@@ -50,6 +52,14 @@ LOOTBOX_CATEGORY_BLACKLIST: frozenset[str] = frozenset({
     "modifiers",
     "legendary",
 })
+
+# Numeric rank per rarity — used to detect upgrade rolls
+RARITY_ORDER: dict[str, int] = {
+    "common":    0,
+    "uncommon":  1,
+    "rare":      2,
+    "very_rare": 3,
+}
 
 RARITY_COLORS = {
     "common":               "#d0d0d0",
@@ -361,7 +371,14 @@ class LootboxDialog(QDialog):
         self.selected_indices: set[int] = set()
         self.cards: list[ItemCard]      = []
 
+        # Animation state
+        self._reveal_index:  int        = 0
+        self._reveal_timer              = QTimer(self)
+        self._animations:    list       = []   # keep QPropertyAnimation alive
+        self._media_players: list       = []   # keep QMediaPlayer + QAudioOutput alive
+
         self._build_ui()
+        self._start_reveal_animation()
 
     # ------------------------------------------------------------------
     # Item generation
@@ -456,6 +473,10 @@ class LootboxDialog(QDialog):
         for i, item in enumerate(self.loot_items):
             card = ItemCard(i, item, grid_w)
             card.clicked.connect(self._on_card_click)
+            # Start invisible — revealed one by one by the animation
+            eff = QGraphicsOpacityEffect(card)
+            eff.setOpacity(0.0)
+            card.setGraphicsEffect(eff)
             self.cards.append(card)
             grid.addWidget(card, i // 4, i % 4)
 
@@ -481,10 +502,62 @@ class LootboxDialog(QDialog):
         vbox.addWidget(self.confirm_btn)
 
     # ------------------------------------------------------------------
+    # Reveal animation
+    # ------------------------------------------------------------------
+
+    def _start_reveal_animation(self):
+        self._reveal_timer.setInterval(350)
+        self._reveal_timer.timeout.connect(self._reveal_next_card)
+        self._reveal_timer.start()
+
+    def _reveal_next_card(self):
+        if self._reveal_index >= len(self.cards):
+            self._reveal_timer.stop()
+            return
+
+        card = self.cards[self._reveal_index]
+        item = self.loot_items[self._reveal_index]
+
+        # Fade in: animate the existing QGraphicsOpacityEffect opacity 0 → 1
+        eff = card.graphicsEffect()
+        if eff is None:
+            eff = QGraphicsOpacityEffect(card)
+            card.setGraphicsEffect(eff)
+
+        anim = QPropertyAnimation(eff, b"opacity", self)
+        anim.setDuration(300)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # Remove the effect once the animation is done so normal card styling takes over
+        anim.finished.connect(lambda c=card: c.setGraphicsEffect(None))
+        anim.start()
+        self._animations.append(anim)
+
+        # Determine sound: victory.mp3 if item rarity is higher than lootbox tier
+        lb_rank   = RARITY_ORDER.get(self.lootbox_rarity, 0)
+        item_rar  = (getattr(item, "rarity", None) or "common").replace("consumable_", "")
+        item_rank = RARITY_ORDER.get(item_rar, 0)
+        snd_file  = resource_path(
+            "fx/victory.mp3" if item_rank > lb_rank else "fx/pop_ui.mp3"
+        )
+        player    = QMediaPlayer(self)
+        audio_out = QAudioOutput(self)
+        player.setAudioOutput(audio_out)
+        audio_out.setVolume(0.7)
+        player.setSource(QUrl.fromLocalFile(snd_file))
+        player.play()
+        self._media_players.append((player, audio_out))  # prevent GC
+
+        self._reveal_index += 1
+
+    # ------------------------------------------------------------------
     # Selection logic
     # ------------------------------------------------------------------
 
     def _on_card_click(self, idx: int):
+        if self._reveal_timer.isActive():
+            return  # ignore clicks during reveal animation
         if idx in self.selected_indices:
             self.selected_indices.discard(idx)
             self.cards[idx].set_selected(False)
