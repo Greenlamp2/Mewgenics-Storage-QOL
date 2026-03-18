@@ -19,7 +19,7 @@ from version import APP_VERSION
 # mapping tab label → save_inventories key
 TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
 
-DEBUG_MODE = True   # set to True to enable debug actions (e.g.: Clone to Storage from Pool)
+DEBUG_MODE = False   # set to True to enable debug actions (e.g.: Clone to Storage from Pool)
 
 ICON_DIR    = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "img")
 MONEY_ICON  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "money.png")
