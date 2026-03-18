@@ -15,6 +15,7 @@ class Item:
         self.tailByte = itemdict.get('tailByte')
         self.sep_flag = itemdict.get('sep_flag')
         self.broken = self.sep_flag == 5 and trash
+        self.used   = self.sep_flag == 3
 
         self.complete()
 

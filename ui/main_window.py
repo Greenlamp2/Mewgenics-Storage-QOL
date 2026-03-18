@@ -180,6 +180,40 @@ def broken_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
     return result
 
 
+def used_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
+    """Return a copy of *pixmap* with a 'U' badge in the top-right corner."""
+    from PySide6.QtGui import QColor, QFont, QPen
+    result = QPixmap(pixmap.size())
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.drawPixmap(0, 0, pixmap)
+
+    icon_size = pixmap.width()
+    badge_r   = max(8, icon_size // 4)   # circle radius
+    cx        = icon_size - badge_r - 1  # center X (top-right)
+    cy        = badge_r + 1              # center Y
+
+    # Circle background
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor(210, 140, 0, 230))
+    painter.setPen(QPen(QColor(255, 200, 60), max(1, icon_size // 20)))
+    painter.drawEllipse(cx - badge_r, cy - badge_r, badge_r * 2, badge_r * 2)
+
+    # "U" letter
+    font = QFont()
+    font.setPixelSize(max(8, badge_r))
+    font.setBold(True)
+    painter.setFont(font)
+    painter.setPen(QPen(Qt.GlobalColor.white))
+    painter.drawText(
+        cx - badge_r, cy - badge_r, badge_r * 2, badge_r * 2,
+        Qt.AlignmentFlag.AlignCenter,
+        "U",
+    )
+    painter.end()
+    return result
+
+
 def locked_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
     """Return a desaturated, darkened copy of *pixmap* for undiscovered items."""
     from PySide6.QtGui import QColor
@@ -951,12 +985,16 @@ class MainWindow(QMainWindow):
         pixmap    = svg_to_pixmap(icon_path, ICON_SIZE)
         if getattr(item, "broken", False):
             pixmap = broken_overlay_pixmap(pixmap)
+        elif getattr(item, "used", False):
+            pixmap = used_overlay_pixmap(pixmap)
         elif getattr(item, "locked", False):
             pixmap = locked_overlay_pixmap(pixmap)
 
         tooltip = details.get("name_resolved") or item.name or "?"
         if getattr(item, "broken", False):
             tooltip += " [BROKEN]"
+        if getattr(item, "used", False):
+            tooltip += " [USED]"
         if getattr(item, "locked", False):
             tooltip += " [Not discovered]"
 
@@ -1162,7 +1200,11 @@ class MainWindow(QMainWindow):
         # Large icon
         icon_path = os.path.join(ICON_DIR, item.icon_name or "")
         detail_px = svg_to_pixmap(icon_path, 96)
-        if getattr(item, "locked", False):
+        if getattr(item, "broken", False):
+            detail_px = broken_overlay_pixmap(detail_px)
+        elif getattr(item, "used", False):
+            detail_px = used_overlay_pixmap(detail_px)
+        elif getattr(item, "locked", False):
             detail_px = locked_overlay_pixmap(detail_px)
         self.detail_icon.setPixmap(detail_px)
 
@@ -1173,6 +1215,8 @@ class MainWindow(QMainWindow):
         lines = []
         if getattr(item, "broken", False):
             lines.append('<b><span style="color:#e02828">⚠ BROKEN</span></b>')
+        if getattr(item, "used", False):
+            lines.append('<b><span style="color:#d4900a">⌛ USED</span></b>')
         rarity = item.rarity
         if rarity:
             color = RARITY_COLORS.get(rarity, "#cccccc")
