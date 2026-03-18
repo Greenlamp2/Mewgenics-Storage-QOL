@@ -1,13 +1,13 @@
 import os
 
-from PySide6.QtCore import Qt, QSize, QTimer, QPoint
-from PySide6.QtGui import QPixmap, QPainter, QIcon
+from PySide6.QtCore import Qt, QSize, QTimer, QPoint, QObject, QByteArray, QMimeData, QEvent, Signal
+from PySide6.QtGui import QPixmap, QPainter, QIcon, QDrag, QFontMetrics
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QFrame, QSplitter,
     QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton, QMessageBox,
-    QApplication, QStackedWidget,
+    QApplication, QStackedWidget, QInputDialog, QMenu,
 )
 
 from parse.item import Item, GhostItem
@@ -70,6 +70,92 @@ SAVE_INFO_FIELDS = [
 
 # Cell size used both by QGridLayout items and VirtualItemGrid
 CELL_SIZE = ICON_SIZE + 8 + 4   # button (ICON_SIZE+8) + grid spacing (4)
+
+# MIME type used for bank drag-and-drop
+BANK_DRAG_MIME = "application/x-mewgenics-bank"
+
+
+class _FolderButton(QToolButton):
+    """Folder / '..' button in the Bank tab that accepts drag-and-drop."""
+    dropped = Signal(dict)   # {"type": "item", "seq_id": N}
+
+    def __init__(self):
+        super().__init__()
+        self.setAcceptDrops(True)
+        self._base_style = ""
+
+    def setStyleSheet(self, style: str):          # keep a copy for drag highlight
+        self._base_style = style
+        super().setStyleSheet(style)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(BANK_DRAG_MIME):
+            event.acceptProposedAction()
+            super().setStyleSheet(self._base_style + " border: 2px solid #4a9eff;")
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        super().setStyleSheet(self._base_style)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        import json
+        super().setStyleSheet(self._base_style)
+        try:
+            raw_bytes = event.mimeData().data(BANK_DRAG_MIME).data()  # QByteArray → bytes
+            data = json.loads(raw_bytes.decode())
+            self.dropped.emit(data)
+        except Exception:
+            pass
+        event.acceptProposedAction()
+
+
+class _ItemDragFilter(QObject):
+    """Event filter installed on a bank item QToolButton to enable drag-to-folder."""
+
+    def __init__(self, btn: QToolButton, seq_id: int, parent: QObject = None):
+        super().__init__(parent)
+        self._btn     = btn
+        self._seq_id  = seq_id
+        self._start   = None
+        self._dragged = False
+        btn.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        from PySide6.QtGui import QMouseEvent
+        t = event.type()
+        if t == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._start   = event.position().toPoint()
+                self._dragged = False
+        elif t == QEvent.Type.MouseMove and isinstance(event, QMouseEvent):
+            me: QMouseEvent = event
+            if self._start is not None and (me.buttons() & Qt.MouseButton.LeftButton):
+                if (me.position().toPoint() - self._start).manhattanLength() >= QApplication.startDragDistance():
+                    self._start   = None
+                    self._dragged = True
+                    self._do_drag()
+                    return True
+        elif t == QEvent.Type.MouseButtonRelease:
+            self._start = None
+            if self._dragged:
+                self._dragged = False
+                self._btn.setDown(False)
+                return True
+        return False
+
+    def _do_drag(self):
+        import json
+        drag = QDrag(self._btn)
+        mime = QMimeData()
+        mime.setData(
+            BANK_DRAG_MIME,
+            QByteArray(json.dumps({"type": "item", "seq_id": self._seq_id}).encode()),
+        )
+        drag.setMimeData(mime)
+        drag.setPixmap(self._btn.icon().pixmap(QSize(32, 32)))
+        drag.exec(Qt.DropAction.MoveAction)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -262,6 +348,8 @@ class MainWindow(QMainWindow):
         self._selected_btn: QToolButton | None = None
         self._sort_key: str = "default"
         self._multi_selection: dict[int, QToolButton] = {}
+        self._bank_folder_id: str | None = None   # None = bank root
+        self._bank_drag_filters: list = []         # hold refs to prevent GC
 
         self.ctrl.load_data()
         self._build_ui()
@@ -411,6 +499,35 @@ class MainWindow(QMainWindow):
         _gpl.setContentsMargins(0, 0, 0, 0)
         _gpl.setSpacing(0)
         _gpl.addWidget(sort_bar)
+
+        # ── Bank folder navigation bar (hidden on non-Bank tabs) ──────
+        self._bank_nav_bar = QWidget()
+        self._bank_nav_bar.setVisible(False)
+        self._bank_nav_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._bank_nav_bar.setStyleSheet(
+            "QWidget { background: #1a1228; border-bottom: 1px solid #4a3060; }"
+        )
+        _bnl = QHBoxLayout(self._bank_nav_bar)
+        _bnl.setContentsMargins(8, 4, 8, 4)
+        _bnl.setSpacing(6)
+
+        self._bank_path_lbl = QLabel("📁 Bank")
+        self._bank_path_lbl.setStyleSheet(
+            "color: #b090e0; font-size: 12px; background: transparent;"
+        )
+        _bnl.addWidget(self._bank_path_lbl)
+        _bnl.addStretch()
+
+        _bank_new_btn = QPushButton("➕ New Folder")
+        _bank_new_btn.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 8px; border: 1px solid #5a3080;"
+            " border-radius: 3px; background: #2d1a40; color: #c090ff; }"
+            "QPushButton:hover { background: #3d2a50; }"
+        )
+        _bank_new_btn.clicked.connect(self._bank_create_folder)
+        _bnl.addWidget(_bank_new_btn)
+
+        _gpl.addWidget(self._bank_nav_bar)
         _gpl.addWidget(self.multi_select_bar)
         _gpl.addWidget(self.sacrifice_all_btn)
         _gpl.addWidget(self._scroll_area)
@@ -889,7 +1006,13 @@ class MainWindow(QMainWindow):
         self._refresh_pool_tab_title()
         if current_tab == "Save Info":
             self._refresh_save_info()
+        elif current_tab == "Bank":
+            self._bank_folder_id = None   # back to root on reload
+            self._bank_nav_bar.setVisible(True)
+            self._bank_refresh_nav_bar()
+            self._populate_bank()
         else:
+            self._bank_nav_bar.setVisible(False)
             self._populate(self.ctrl.inv_items[current_tab])
         if show_overlay:
             self._show_overlay()
@@ -925,6 +1048,166 @@ class MainWindow(QMainWindow):
                 break
 
     # ------------------------------------------------------------------
+    # Bank — folder navigation & population
+    # ------------------------------------------------------------------
+
+    def _bank_refresh_nav_bar(self):
+        """Update the path label in the bank nav bar."""
+        path_parts = self.ctrl.get_bank_folder_path(self._bank_folder_id)
+        if path_parts:
+            label = "📁 Bank  ›  " + "  ›  ".join(f["name"] for f in path_parts)
+        else:
+            label = "📁 Bank"
+        self._bank_path_lbl.setText(label)
+
+    def _bank_go_to_folder(self, folder_id):
+        """Navigate into (or back from) a bank folder and refresh the grid."""
+        self._bank_folder_id = folder_id
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._clear_multi_selection()
+        self._bank_refresh_nav_bar()
+        self._populate_bank()
+
+    def _make_folder_cell(self, btn: "_FolderButton", label_text: str) -> QWidget:
+        """Wrap *btn* in a fixed-size cell widget with an elided name label below."""
+        cell = QWidget()
+        cell.setFixedWidth(ICON_SIZE + 8)
+        layout = QVBoxLayout(cell)
+        layout.setContentsMargins(0, 0, 0, 2)
+        layout.setSpacing(2)
+        layout.addWidget(btn)
+
+        lbl = QLabel()
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setFixedWidth(ICON_SIZE + 8)
+        lbl.setStyleSheet("color: #b090d8; font-size: 10px; background: transparent;")
+        fm      = QFontMetrics(lbl.font())
+        elided  = fm.elidedText(label_text, Qt.TextElideMode.ElideRight, ICON_SIZE + 4)
+        lbl.setText(elided)
+        lbl.setToolTip(label_text)
+        layout.addWidget(lbl)
+        return cell
+
+    def _populate_bank(self):
+        """Render folders and items for the current bank folder."""
+        self._clear_grid()
+        self._bank_drag_filters = []   # release old filters
+
+        folder_id   = self._bank_folder_id
+        subfolders  = self.ctrl.get_bank_subfolders(folder_id)
+        items_here  = self.ctrl.get_bank_items_in_folder(folder_id)
+        all_items   = self.ctrl.inventories["bank"].items
+
+        row, col = 0, 0
+
+        def _place(widget):
+            nonlocal row, col
+            self.grid.addWidget(widget, row, col)
+            col += 1
+            if col >= GRID_COLS:
+                col = 0
+                row += 1
+
+        _folder_btn_style = (
+            "QToolButton {{ border: 2px solid {border}; border-radius: 6px;"
+            " background: {bg}; color: {fg}; font-size: 24px; }}"
+            "QToolButton:hover {{ background: {hbg}; }}"
+        )
+
+        # ".." button — navigate to parent + drop target to move items up
+        if folder_id is not None:
+            parent_id  = self.ctrl.get_bank_folder_parent(folder_id)
+            parent_btn = _FolderButton()
+            parent_btn.setText("...")
+            parent_btn.setFixedSize(ICON_SIZE + 8, ICON_SIZE + 8)
+            parent_btn.setToolTip("Go up / Drop here to move item to parent folder")
+            parent_btn.setStyleSheet(
+                _folder_btn_style.format(
+                    border="#555", bg="rgba(60,60,80,0.25)",
+                    fg="#aaa", hbg="rgba(80,80,100,0.40)",
+                )
+            )
+            parent_btn.clicked.connect(lambda: self._bank_go_to_folder(parent_id))
+            parent_btn.dropped.connect(lambda d: self._bank_handle_drop(d, parent_id))
+            _place(self._make_folder_cell(parent_btn, "..."))
+
+        # Folder buttons
+        for folder in subfolders:
+            fid  = folder["id"]
+            name = folder["name"]
+            fb   = _FolderButton()
+            fb.setText("📁")
+            fb.setFixedSize(ICON_SIZE + 8, ICON_SIZE + 8)
+            fb.setToolTip(name)
+            fb.setStyleSheet(
+                _folder_btn_style.format(
+                    border="#4a3060", bg="rgba(74,48,96,0.25)",
+                    fg="#c090ff", hbg="rgba(74,48,96,0.50)",
+                )
+            )
+            fb.clicked.connect(lambda _=False, f=fid: self._bank_go_to_folder(f))
+            fb.dropped.connect(lambda d, f=fid: self._bank_handle_drop(d, f))
+            fb.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            fb.customContextMenuRequested.connect(
+                lambda _, f_id=fid, f_name=name: self._bank_folder_ctx_menu(f_id, f_name)
+            )
+            _place(self._make_folder_cell(fb, name))
+
+        # Item buttons — sorted, always after folders
+        for orig_idx, item in self._sorted_indexed(list(items_here)):
+            btn = self._make_item_btn(orig_idx, item, all_items)
+            flt = _ItemDragFilter(btn, item.seqId, parent=btn)
+            self._bank_drag_filters.append(flt)
+            _place(btn)
+
+    def _bank_handle_drop(self, data: dict, target_folder_id):
+        """Called when an item is dropped onto a folder or '..' button."""
+        if data.get("type") != "item":
+            return
+        self.ctrl.move_bank_item_to_folder(data["seq_id"], target_folder_id)
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._populate_bank()
+
+    def _bank_create_folder(self):
+        """Prompt for a name and create a new folder inside the current folder."""
+        name, ok = QInputDialog.getText(
+            self, "New Folder", "Folder name:",
+        )
+        if not ok or not name.strip():
+            return
+        self.ctrl.create_bank_folder(name.strip(), self._bank_folder_id)
+        self._populate_bank()
+
+    def _bank_folder_ctx_menu(self, folder_id: str, folder_name: str):
+        """Right-click context menu for a folder button: rename / delete."""
+        menu = QMenu(self)
+        rename_action = menu.addAction("✏ Rename")
+        delete_action = menu.addAction("🗑 Delete")
+        action = menu.exec(self.cursor().pos())
+        if action == rename_action:
+            new_name, ok = QInputDialog.getText(
+                self, "Rename Folder", "New name:", text=folder_name,
+            )
+            if ok and new_name.strip():
+                self.ctrl.rename_bank_folder(folder_id, new_name.strip())
+                self._populate_bank()
+                self._bank_refresh_nav_bar()
+        elif action == delete_action:
+            reply = QMessageBox.question(
+                self,
+                "Delete Folder",
+                f'Delete folder "<b>{folder_name}</b>"?<br>'
+                "All items inside will be moved back to the bank root.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.ctrl.delete_bank_folder(folder_id)
+                self._populate_bank()
+
+    # ------------------------------------------------------------------
     # Tab switching
     # ------------------------------------------------------------------
 
@@ -940,8 +1223,14 @@ class MainWindow(QMainWindow):
         if label == "Save Info":
             self._content_stack.setCurrentIndex(1)
             self._refresh_save_info()
+        elif label == "Bank":
+            self._content_stack.setCurrentIndex(0)
+            self._bank_nav_bar.setVisible(True)
+            self._bank_refresh_nav_bar()
+            self._populate_bank()
         else:
             self._content_stack.setCurrentIndex(0)
+            self._bank_nav_bar.setVisible(False)
             self._populate(self.ctrl.inv_items[label])
 
     def _clear_grid(self):
@@ -970,7 +1259,10 @@ class MainWindow(QMainWindow):
             btn.setStyleSheet(active if k == key else base)
         label = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
         self._clear_grid()
-        self._populate(self.ctrl.inv_items[label])
+        if label == "Bank":
+            self._populate_bank()
+        else:
+            self._populate(self.ctrl.inv_items[label])
 
     def _sorted_indexed(self, indexed: list) -> list:
         if self._sort_key == "default":

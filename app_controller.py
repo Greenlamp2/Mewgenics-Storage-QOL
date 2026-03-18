@@ -9,9 +9,9 @@ import os
 from parse.item import Item, GhostItem
 from catalogs.itemcatalog import item_catalog
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, \
-    load_save_properties, load_cats_count, load_bank_inventory, SAVE_INFO_KEYS
+    load_save_properties, load_cats_count, load_bank_inventory, load_bank_folders, SAVE_INFO_KEYS
 from utils.savers import save_inventories as _save_inventories, save_tokens, \
-    save_bank_inventory, save_items_pool
+    save_bank_inventory, save_items_pool, save_bank_folders
 
 # Rarities that should never appear in any view
 EXCLUDED_RARITIES = {"sidequest", "quest"}
@@ -33,6 +33,7 @@ class AppController:
         self.undiscovered_pool_items: list = []
         self.inv_items: dict = {}
         self.save_properties: dict[str, str] = {}
+        self.bank_folders: dict = {"folders": [], "item_folders": {}}
 
     # ------------------------------------------------------------------
     # Data loading
@@ -52,6 +53,7 @@ class AppController:
         self.golds  = load_gold(self.sav_path)
         self.tokens = load_tokens(self.sav_path)
         self.items_pool = load_items_pool()
+        self.bank_folders = load_bank_folders(self.sav_path)
         self.save_properties = load_save_properties(self.sav_path, SAVE_INFO_KEYS)
         self.save_properties["_cats_count"] = str(load_cats_count(self.sav_path))
 
@@ -312,24 +314,6 @@ class AppController:
             ]
             self.inv_items["Pool"] = self.pool_items + self.undiscovered_pool_items
 
-    def apply_move_from_bank(self, bank_idx: int):
-        """Move item at *bank_idx* from the bank back to storage, persist."""
-        bank    = self.inventories["bank"]
-        storage = self.inventories["storage"]
-
-        raw = bank.raws[bank_idx]
-        del bank.raws[bank_idx]
-        del bank.items[bank_idx]
-        bank.count -= 1
-
-        new_seq = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
-        new_raw = {**raw, "seqId": new_seq}
-        storage.raws.append(new_raw)
-        storage.items.append(Item(new_raw))
-        storage.count += 1
-
-        self.save_inventories()
-
     def apply_move_multiple_to_bank(self, src_key: str, indices: list[int]):
         """Move multiple items from *src_key* inventory to the bank in reverse-index order, persist."""
         src  = self.inventories[src_key]
@@ -344,7 +328,6 @@ class AppController:
             bank.raws.append(new_raw)
             bank.items.append(Item(new_raw))
             bank.count += 1
-            # Pool auto-discovery
             name = new_raw.get("name")
             if name and name not in self.items_pool:
                 self.items_pool[name] = new_raw
@@ -363,12 +346,37 @@ class AppController:
         ]
         self.inv_items["Pool"] = self.pool_items + self.undiscovered_pool_items
 
+    def apply_move_from_bank(self, bank_idx: int):
+        """Move item at *bank_idx* from the bank back to storage, persist."""
+        bank    = self.inventories["bank"]
+        storage = self.inventories["storage"]
+
+        raw    = bank.raws[bank_idx]
+        seq_id = str(raw.get("seqId", ""))
+        self.bank_folders["item_folders"].pop(seq_id, None)
+
+        del bank.raws[bank_idx]
+        del bank.items[bank_idx]
+        bank.count -= 1
+
+        new_seq = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
+        new_raw = {**raw, "seqId": new_seq}
+        storage.raws.append(new_raw)
+        storage.items.append(Item(new_raw))
+        storage.count += 1
+
+        self.save_inventories()
+        save_bank_folders(self.sav_path, self.bank_folders)
+        self._refresh_mtime()
+
     def apply_move_multiple_from_bank(self, indices: list[int]):
         """Move multiple bank items back to storage in reverse-index order, persist."""
         bank    = self.inventories["bank"]
         storage = self.inventories["storage"]
         for idx in sorted(indices, reverse=True):
-            raw = bank.raws[idx]
+            raw    = bank.raws[idx]
+            seq_id = str(raw.get("seqId", ""))
+            self.bank_folders["item_folders"].pop(seq_id, None)
             del bank.raws[idx]
             del bank.items[idx]
             bank.count -= 1
@@ -378,6 +386,114 @@ class AppController:
             storage.items.append(Item(new_raw))
             storage.count += 1
         self.save_inventories()
+        save_bank_folders(self.sav_path, self.bank_folders)
+        self._refresh_mtime()
+
+    # ------------------------------------------------------------------
+    # Bank — folder management
+    # ------------------------------------------------------------------
+
+    def get_bank_subfolders(self, parent_id) -> list:
+        """Return folders whose parent_id matches (None = root)."""
+        return [f for f in self.bank_folders["folders"] if f.get("parent_id") == parent_id]
+
+    def get_bank_folder_by_id(self, folder_id: str) -> dict | None:
+        for f in self.bank_folders["folders"]:
+            if f["id"] == folder_id:
+                return f
+        return None
+
+    def get_bank_folder_parent(self, folder_id: str):
+        """Return parent_id of a folder, or None if it is at root."""
+        f = self.get_bank_folder_by_id(folder_id)
+        return f.get("parent_id") if f else None
+
+    def get_bank_items_in_folder(self, folder_id) -> list[tuple[int, Item]]:
+        """Return [(bank_inventory_index, Item)] for items in *folder_id* (None = root)."""
+        result = []
+        for i, item in enumerate(self.inventories["bank"].items):
+            mapped = self.bank_folders["item_folders"].get(str(item.seqId))
+            if mapped == folder_id:
+                result.append((i, item))
+        return result
+
+    def get_bank_folder_path(self, folder_id) -> list[dict]:
+        """Return list of folder dicts from root to *folder_id* (inclusive)."""
+        path = []
+        fid  = folder_id
+        while fid is not None:
+            f = self.get_bank_folder_by_id(fid)
+            if f is None:
+                break
+            path.append(f)
+            fid = f.get("parent_id")
+        path.reverse()
+        return path
+
+    def is_bank_folder_ancestor(self, ancestor_id: str, descendant_id) -> bool:
+        """Return True if ancestor_id is an ancestor of descendant_id."""
+        fid = descendant_id
+        while fid is not None:
+            if fid == ancestor_id:
+                return True
+            f = self.get_bank_folder_by_id(fid)
+            fid = f.get("parent_id") if f else None
+        return False
+
+    def create_bank_folder(self, name: str, parent_id) -> str:
+        """Create a new folder under *parent_id*, return its id."""
+        import uuid
+        folder_id = str(uuid.uuid4())[:8]
+        self.bank_folders["folders"].append({
+            "id":        folder_id,
+            "name":      name,
+            "parent_id": parent_id,
+        })
+        save_bank_folders(self.sav_path, self.bank_folders)
+        self._refresh_mtime()
+        return folder_id
+
+    def rename_bank_folder(self, folder_id: str, new_name: str):
+        for f in self.bank_folders["folders"]:
+            if f["id"] == folder_id:
+                f["name"] = new_name
+                break
+        save_bank_folders(self.sav_path, self.bank_folders)
+        self._refresh_mtime()
+
+    def delete_bank_folder(self, folder_id: str):
+        """Delete folder (and sub-folders); move all contained items to root."""
+        def _collect(fid):
+            ids = {fid}
+            for f in self.bank_folders["folders"]:
+                if f.get("parent_id") == fid:
+                    ids |= _collect(f["id"])
+            return ids
+        all_ids = _collect(folder_id)
+        for seq_id, fid in list(self.bank_folders["item_folders"].items()):
+            if fid in all_ids:
+                self.bank_folders["item_folders"][seq_id] = None
+        self.bank_folders["folders"] = [
+            f for f in self.bank_folders["folders"] if f["id"] not in all_ids
+        ]
+        save_bank_folders(self.sav_path, self.bank_folders)
+        self._refresh_mtime()
+
+    def move_bank_item_to_folder(self, seq_id: int, folder_id):
+        """Assign bank item (by seqId) to *folder_id* (None = root)."""
+        self.bank_folders["item_folders"][str(seq_id)] = folder_id
+        save_bank_folders(self.sav_path, self.bank_folders)
+        self._refresh_mtime()
+
+    def move_bank_folder_to_folder(self, folder_id: str, new_parent_id):
+        """Move a folder under a new parent (None = root)."""
+        for f in self.bank_folders["folders"]:
+            if f["id"] == folder_id:
+                f["parent_id"] = new_parent_id
+                break
+        save_bank_folders(self.sav_path, self.bank_folders)
+        self._refresh_mtime()
+
 
     # ------------------------------------------------------------------
     # Repair broken item (trash → storage)

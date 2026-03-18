@@ -156,3 +156,30 @@ def load_items_pool():
         return {}
     with open(ITEMS_POOL_PATH, encoding="utf-8") as f:
         return json.load(f)
+
+
+BANK_FOLDERS_KEY = "bank_folders_v1"
+
+def load_bank_folders(sav_path: str) -> dict:
+    """Load the bank folder structure from the SQLite custom table.
+
+    Returns {"folders": [...], "item_folders": {str(seq_id): folder_id_or_None}}.
+    """
+    empty = {"folders": [], "item_folders": {}}
+    if not os.path.exists(sav_path):
+        return empty
+    try:
+        conn = sqlite3.connect(sav_path)
+        conn.execute("CREATE TABLE IF NOT EXISTS custom (key TEXT PRIMARY KEY, data TEXT)")
+        conn.commit()
+        row = conn.execute(
+            "SELECT data FROM custom WHERE key=?", (BANK_FOLDERS_KEY,)
+        ).fetchone()
+        conn.close()
+        if row:
+            import json as _json
+            return _json.loads(row[0])
+    except Exception:
+        pass
+    return empty
+

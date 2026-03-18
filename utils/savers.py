@@ -140,3 +140,18 @@ def save_items_pool(pool):
     os.makedirs(os.path.dirname(ITEMS_POOL_PATH), exist_ok=True)
     with open(ITEMS_POOL_PATH, "w", encoding="utf-8") as f:
         json.dump(pool, f, indent=2)
+
+
+_BANK_FOLDERS_KEY = "bank_folders_v1"
+
+def save_bank_folders(sav_path: str, data: dict):
+    """Persist bank folder structure to the SQLite custom table."""
+    conn = sqlite3.connect(sav_path)
+    conn.execute("CREATE TABLE IF NOT EXISTS custom (key TEXT PRIMARY KEY, data TEXT)")
+    conn.execute(
+        "INSERT OR REPLACE INTO custom (key, data) VALUES (?, ?)",
+        (_BANK_FOLDERS_KEY, json.dumps(data, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+
