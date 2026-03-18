@@ -1,5 +1,6 @@
 {
   "all": [
+    "22Rifle",
     "AAABattery",
     "AFriendsFoot",
     "AdvancedAlloyArmor",
@@ -2404,6 +2405,7 @@
     "WizCheese"
   ],
   "weapons": [
+    "22Rifle",
     "AlienBlaster",
     "AlienTech",
     "AmericanFlag",
