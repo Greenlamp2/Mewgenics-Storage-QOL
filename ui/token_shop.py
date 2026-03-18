@@ -775,6 +775,11 @@ class TokenShopDialog(QDialog):
         if not self.debug:
             self.tokens[rarity] -= TOKEN_COST
             save_tokens(self.sav_path, self.tokens)
+            # Refresh mtime so LootboxDialog doesn't see this write as an external change
+            try:
+                self.loaded_mtime = os.path.getmtime(self.sav_path)
+            except OSError:
+                pass
 
         self._update_buttons()
 
@@ -788,6 +793,11 @@ class TokenShopDialog(QDialog):
             loaded_mtime=self.loaded_mtime,
         )
         dlg.exec()
+        # Sync mtime after the lootbox save so subsequent lootboxes start clean
+        try:
+            self.loaded_mtime = os.path.getmtime(self.sav_path)
+        except OSError:
+            pass
         if dlg.result() == QDialog.DialogCode.Accepted:
             self.items_added.emit()
 
