@@ -7,6 +7,42 @@ from utils.save_manager import TOKENS_BANK_PATH, ITEMS_POOL_PATH
 
 RARITIES = ("common", "uncommon", "rare", "very_rare")
 
+SAVE_INFO_KEYS = [
+    "BonusBirdsKilled",
+    "house_food",
+    "house_gold",
+    "save_file_percent",
+    "current_day",
+    "current_house_weather",
+]
+
+
+def load_save_properties(path: str, keys: list[str]) -> dict[str, str]:
+    """Fetch multiple properties from the 'properties' table. Returns {key: raw_value_str}."""
+    empty = {k: "" for k in keys}
+    if not os.path.exists(path):
+        return empty
+    conn = sqlite3.connect(path)
+    result: dict[str, str] = {}
+    for key in keys:
+        row = conn.execute("SELECT data FROM properties WHERE key=?", (key,)).fetchone()
+        result[key] = row[0] if row else ""
+    conn.close()
+    return result
+
+
+def load_cats_count(path: str) -> int:
+    """Return the number of rows in the 'cats' table (= total cats seen)."""
+    if not os.path.exists(path):
+        return 0
+    try:
+        conn = sqlite3.connect(path)
+        row = conn.execute("SELECT COUNT(*) FROM cats").fetchone()
+        conn.close()
+        return int(row[0]) if row else 0
+    except Exception:
+        return 0
+
 
 def _fetch_blob(conn, key):
     row = conn.execute("SELECT data FROM files WHERE key=?", (key,)).fetchone()

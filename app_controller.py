@@ -8,7 +8,8 @@ import os
 
 from parse.item import Item, GhostItem
 from catalogs.itemcatalog import item_catalog
-from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool
+from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, \
+    load_save_properties, load_cats_count, SAVE_INFO_KEYS
 from utils.savers import save_inventories as _save_inventories, save_tokens, save_items_pool
 
 # Rarities that should never appear in any view
@@ -30,6 +31,7 @@ class AppController:
         self.pool_items: list = []
         self.undiscovered_pool_items: list = []
         self.inv_items: dict = {}
+        self.save_properties: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Data loading
@@ -48,6 +50,8 @@ class AppController:
         self.golds  = load_gold(self.sav_path)
         self.tokens = load_tokens(self.loaded_mtime)
         self.items_pool = load_items_pool()
+        self.save_properties = load_save_properties(self.sav_path, SAVE_INFO_KEYS)
+        self.save_properties["_cats_count"] = str(load_cats_count(self.sav_path))
 
         # Auto-add storage + trash items into the pool (never overwrite existing entries)
         changed = False

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QFrame, QSplitter,
     QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton, QMessageBox,
-    QApplication,
+    QApplication, QStackedWidget,
 )
 
 from parse.item import Item, GhostItem
@@ -55,6 +55,18 @@ RARITY_ORDER = {
     "very_rare": 3, "consumable_very_rare": 3,
 }
 SORT_KEYS    = ("default", "name", "rarity", "category")
+
+# Save Info tab — fields to display from the 'properties' table
+# (key, display_name, emoji, format: "int" | "percent" | "str")
+SAVE_INFO_FIELDS = [
+    ("current_day",           "Current Day",     "📅", "int"),
+    ("house_gold",            "Gold",            "💰", "int"),
+    ("house_food",            "Food",            "🍖", "int"),
+    ("save_file_percent",     "Completion",      "📊", "percent"),
+    ("BonusBirdsKilled",      "Birds Killed",    "🐦", "int"),
+    ("current_house_weather", "House Weather",   "🌤", "str"),
+    ("_cats_count",           "Cats Seen",       "🐱", "int"),
+]
 
 # Cell size used both by QGridLayout items and VirtualItemGrid
 CELL_SIZE = ICON_SIZE + 8 + 4   # button (ICON_SIZE+8) + grid spacing (4)
@@ -239,6 +251,7 @@ class MainWindow(QMainWindow):
         self.tab_bar = QTabBar()
         for label in self.ctrl.inv_items:
             self.tab_bar.addTab(label)
+        self.tab_bar.addTab("Save Info")
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
 
         # ── Sort toolbar ──────────────────────────────────────────────
@@ -289,7 +302,8 @@ class MainWindow(QMainWindow):
         self._scroll_area.setWidget(self.grid_container)
 
         left_layout.addWidget(self.tab_bar)
-        left_layout.addWidget(sort_bar)
+
+        # sort_bar is added to the content stack's grid page below (not directly to left_layout)
 
         # ── Multi-selection action bar ─────────────────────────────────
         self.multi_select_bar = QWidget()
@@ -336,9 +350,22 @@ class MainWindow(QMainWindow):
         ms_clear_btn.clicked.connect(self._clear_multi_selection)
         ms_layout.addWidget(ms_clear_btn)
 
-        left_layout.addWidget(self.multi_select_bar)
-        left_layout.addWidget(self.sacrifice_all_btn)
-        left_layout.addWidget(self._scroll_area)
+        # ── Content stack: page 0 = item grid  |  page 1 = save info ─
+        _grid_page = QWidget()
+        _gpl = QVBoxLayout(_grid_page)
+        _gpl.setContentsMargins(0, 0, 0, 0)
+        _gpl.setSpacing(0)
+        _gpl.addWidget(sort_bar)
+        _gpl.addWidget(self.multi_select_bar)
+        _gpl.addWidget(self.sacrifice_all_btn)
+        _gpl.addWidget(self._scroll_area)
+
+        self._save_info_panel = self._build_save_info_panel()
+
+        self._content_stack = QStackedWidget()
+        self._content_stack.addWidget(_grid_page)             # index 0
+        self._content_stack.addWidget(self._save_info_panel)  # index 1
+        left_layout.addWidget(self._content_stack)
 
         # ── Right: detail panel ───────────────────────────────────────
         detail_frame = QFrame()
@@ -434,6 +461,95 @@ class MainWindow(QMainWindow):
         splitter.setSizes([680, 280])
 
         self.setCentralWidget(splitter)
+
+    # ------------------------------------------------------------------
+    # Save Info panel
+    # ------------------------------------------------------------------
+
+    def _build_save_info_panel(self) -> QWidget:
+        """Build the static widget skeleton for the Save Info tab."""
+        outer_widget = QWidget()
+        outer = QVBoxLayout(outer_widget)
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.setSpacing(20)
+
+        title = QLabel("📋  Save File Info")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #e0c060;")
+        outer.addWidget(title)
+
+        cards_widget = QWidget()
+        cards_grid = QGridLayout(cards_widget)
+        cards_grid.setSpacing(14)
+        cards_grid.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(cards_widget, alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+
+        self._save_info_value_labels: dict[str, QLabel] = {}
+        COLS = 3
+        for i, (key, display, emoji, _fmt) in enumerate(SAVE_INFO_FIELDS):
+            # Card frame
+            card = QFrame()
+            card.setFixedSize(168, 100)
+            card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            card.setStyleSheet(
+                "QFrame { background: #1a1a1a; border: 1px solid #333;"
+                " border-radius: 10px; }"
+            )
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(12, 10, 12, 10)
+            card_layout.setSpacing(4)
+
+            # Label row
+            lbl_row = QLabel(f"{emoji}  {display}")
+            lbl_row.setStyleSheet("font-size: 11px; color: #888; background: transparent;")
+            card_layout.addWidget(lbl_row)
+
+            # Value label (updated later by _refresh_save_info)
+            val_lbl = QLabel("—")
+            val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            val_lbl.setStyleSheet(
+                "font-size: 22px; font-weight: bold; color: #e0e0e0; background: transparent;"
+            )
+            card_layout.addWidget(val_lbl)
+
+            self._save_info_value_labels[key] = val_lbl
+            cards_grid.addWidget(card, i // COLS, i % COLS)
+
+        outer.addStretch()
+        return outer_widget
+
+    def _refresh_save_info(self):
+        """Update the value labels in the Save Info panel from ctrl.save_properties."""
+        props = self.ctrl.save_properties
+        for key, _display, _emoji, fmt in SAVE_INFO_FIELDS:
+            raw = props.get(key, "")
+            lbl = self._save_info_value_labels.get(key)
+            if lbl is None:
+                continue
+            if raw == "":
+                lbl.setText("—")
+                continue
+            if fmt == "int":
+                try:
+                    lbl.setText(f"{int(float(raw)):,}")
+                except (ValueError, TypeError):
+                    lbl.setText(raw)
+            elif fmt == "percent":
+                try:
+                    pct = float(raw)
+                    # stored as 0.0–1.0 or already 0–100
+                    if pct <= 1.0:
+                        pct *= 100
+                    lbl.setText(f"{pct:.1f} %")
+                    # colour: green if complete, yellow/orange otherwise
+                    color = "#4caf50" if pct >= 99.9 else ("#e0c060" if pct >= 50 else "#e07840")
+                    lbl.setStyleSheet(
+                        f"font-size: 22px; font-weight: bold; color: {color}; background: transparent;"
+                    )
+                except (ValueError, TypeError):
+                    lbl.setText(raw)
+            else:
+                lbl.setText(raw.capitalize() if raw else "—")
 
     # ------------------------------------------------------------------
     # Gold / token bar
@@ -705,7 +821,10 @@ class MainWindow(QMainWindow):
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
         self._refresh_pool_tab_title()
-        self._populate(self.ctrl.inv_items[current_tab])
+        if current_tab == "Save Info":
+            self._refresh_save_info()
+        else:
+            self._populate(self.ctrl.inv_items[current_tab])
         if show_overlay:
             self._show_overlay()
 
@@ -751,7 +870,12 @@ class MainWindow(QMainWindow):
         self._refresh_sacrifice_all_btn()
         self._refresh_multi_bar()
         label = self._tab_key(self.tab_bar.tabText(index))
-        self._populate(self.ctrl.inv_items[label])
+        if label == "Save Info":
+            self._content_stack.setCurrentIndex(1)
+            self._refresh_save_info()
+        else:
+            self._content_stack.setCurrentIndex(0)
+            self._populate(self.ctrl.inv_items[label])
 
     def _clear_grid(self):
         self._selected_btn = None
