@@ -479,6 +479,13 @@ class MainWindow(QMainWindow):
         self.ms_to_storage_btn.clicked.connect(self._move_selected_from_bank)
         ms_layout.addWidget(self.ms_to_storage_btn)
 
+        self.ms_bank_to_trash_btn = QPushButton("🗑 Move to Trash")
+        self.ms_bank_to_trash_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #555; }"
+                                                 "QPushButton:hover { background: #444; }")
+        self.ms_bank_to_trash_btn.setVisible(False)
+        self.ms_bank_to_trash_btn.clicked.connect(self._move_bank_selected_to_trash)
+        ms_layout.addWidget(self.ms_bank_to_trash_btn)
+
         self.ms_gift_btn = QPushButton("🎁 Send Gift")
         self.ms_gift_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #6a3d9a; }"
                                         "QPushButton:hover { background: #5a2d8a; }")
@@ -617,6 +624,16 @@ class MainWindow(QMainWindow):
         )
         self.bank_btn.clicked.connect(self._move_bank_item)
 
+        self.bank_to_trash_btn = QPushButton("🗑 Move to Trash")
+        self.bank_to_trash_btn.setVisible(False)
+        self.bank_to_trash_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
+            " background: #555; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #444; }"
+            "QPushButton:pressed { background: #333; }"
+        )
+        self.bank_to_trash_btn.clicked.connect(self._move_bank_item_to_trash)
+
         self.send_gift_btn = QPushButton("🎁 Send Gift")
         self.send_gift_btn.setVisible(False)
         self.send_gift_btn.setStyleSheet(
@@ -635,6 +652,7 @@ class MainWindow(QMainWindow):
         detail_layout.addWidget(self.repair_btn)
         detail_layout.addWidget(self.move_btn)
         detail_layout.addWidget(self.bank_btn)
+        detail_layout.addWidget(self.bank_to_trash_btn)
         detail_layout.addWidget(self.send_gift_btn)
         detail_layout.addWidget(self.clone_to_storage_btn)
         detail_layout.addStretch()
@@ -1022,6 +1040,7 @@ class MainWindow(QMainWindow):
         self.repair_btn.setVisible(False)
         self.move_btn.setVisible(False)
         self.bank_btn.setVisible(False)
+        self.bank_to_trash_btn.setVisible(False)
         self.send_gift_btn.setVisible(False)
         self.clone_to_storage_btn.setVisible(False)
 
@@ -1451,6 +1470,7 @@ class MainWindow(QMainWindow):
         self.ms_trash_btn.setVisible(is_storage)
         self.ms_to_bank_btn.setVisible(is_trash or is_storage)
         self.ms_to_storage_btn.setVisible(is_bank or is_trash)
+        self.ms_bank_to_trash_btn.setVisible(is_bank)
 
         # Gift button — only for Storage
         if is_storage:
@@ -1507,7 +1527,7 @@ class MainWindow(QMainWindow):
                 _hint = {
                     "Storage": "sacrifice, trash, or send to bank.",
                     "Trash":   "sacrifice or send to bank.",
-                    "Bank":    "move back to storage.",
+                    "Bank":    "move back to storage or to trash.",
                 }.get(current_tab, "use the bar above.")
                 self.detail_info.setText(
                     f'<span style="color:#888">Use the bar above to {_hint}</span>'
@@ -1571,12 +1591,13 @@ class MainWindow(QMainWindow):
             self.repair_btn.setVisible(False)
             self.move_btn.setVisible(False)
             self.bank_btn.setVisible(False)
+            self.bank_to_trash_btn.setVisible(False)
             self.send_gift_btn.setVisible(False)
             self.clone_to_storage_btn.setVisible(
                 DEBUG_MODE and is_pool_tab and not is_locked
             )
         elif is_bank_tab:
-            # Bank tab: only allow withdrawing back to storage
+            # Bank tab: allow withdrawing to storage or trashing
             self.clone_to_storage_btn.setVisible(False)
             self.sacrifice_btn.setVisible(False)
             self.repair_btn.setVisible(False)
@@ -1584,8 +1605,10 @@ class MainWindow(QMainWindow):
             self.send_gift_btn.setVisible(False)
             self.bank_btn.setText("📤 Move to Storage")
             self.bank_btn.setVisible(True)
+            self.bank_to_trash_btn.setVisible(True)
         else:
             self.clone_to_storage_btn.setVisible(False)
+            self.bank_to_trash_btn.setVisible(False)
             token_label = (
                 rarity.replace("_", " ").capitalize()
                 if rarity in self.ctrl.tokens else "?"
@@ -1785,6 +1808,44 @@ class MainWindow(QMainWindow):
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
         self._populate(self.ctrl.inv_items[current_tab])
+
+    def _move_bank_item_to_trash(self):
+        """Single-item: move the selected Bank item to Trash."""
+        if self._selected_item_idx is None or self._selected_inv_key != "Bank":
+            return
+        if not self._confirm_if_save_changed():
+            return
+        self.ctrl.apply_move_bank_item_to_trash(self._selected_item_idx)
+        self._selected_item_idx = None
+        self._selected_btn = None
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
+        self._populate_bank()
+
+    def _move_bank_selected_to_trash(self):
+        """Multi-select: move selected Bank items to Trash."""
+        if not self._multi_selection:
+            return
+        if not self._confirm_if_save_changed():
+            return
+        indices = sorted(self._multi_selection.keys())
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Move to Trash")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(f"Move <b>{len(indices)} item(s)</b> from Bank to Trash?")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+        self.ctrl.apply_move_multiple_bank_to_trash(indices)
+        self._clear_multi_selection()
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
+        self._populate_bank()
 
     def _sacrifice_item(self):
         if self._selected_item_idx is None or self._selected_inv_key is None:

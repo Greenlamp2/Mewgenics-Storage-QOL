@@ -389,6 +389,49 @@ class AppController:
         save_bank_folders(self.sav_path, self.bank_folders)
         self._refresh_mtime()
 
+    def apply_move_bank_item_to_trash(self, bank_idx: int):
+        """Move item at *bank_idx* from the bank to the trash, persist."""
+        bank  = self.inventories["bank"]
+        trash = self.inventories["trash"]
+
+        raw    = bank.raws[bank_idx]
+        seq_id = str(raw.get("seqId", ""))
+        self.bank_folders["item_folders"].pop(seq_id, None)
+
+        del bank.raws[bank_idx]
+        del bank.items[bank_idx]
+        bank.count -= 1
+
+        new_seq = max((r.get("seqId", 0) for r in trash.raws), default=0) + 1
+        new_raw = {**raw, "seqId": new_seq}
+        trash.raws.append(new_raw)
+        trash.items.append(Item(new_raw))
+        trash.count += 1
+
+        self.save_inventories()
+        save_bank_folders(self.sav_path, self.bank_folders)
+        self._refresh_mtime()
+
+    def apply_move_multiple_bank_to_trash(self, indices: list[int]):
+        """Move multiple bank items to trash in reverse-index order, persist."""
+        bank  = self.inventories["bank"]
+        trash = self.inventories["trash"]
+        for idx in sorted(indices, reverse=True):
+            raw    = bank.raws[idx]
+            seq_id = str(raw.get("seqId", ""))
+            self.bank_folders["item_folders"].pop(seq_id, None)
+            del bank.raws[idx]
+            del bank.items[idx]
+            bank.count -= 1
+            new_seq = max((r.get("seqId", 0) for r in trash.raws), default=0) + 1
+            new_raw = {**raw, "seqId": new_seq}
+            trash.raws.append(new_raw)
+            trash.items.append(Item(new_raw))
+            trash.count += 1
+        self.save_inventories()
+        save_bank_folders(self.sav_path, self.bank_folders)
+        self._refresh_mtime()
+
     # ------------------------------------------------------------------
     # Bank — folder management
     # ------------------------------------------------------------------
