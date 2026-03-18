@@ -774,10 +774,7 @@ class TokenShopDialog(QDialog):
 
         if not self.debug:
             self.tokens[rarity] -= TOKEN_COST
-            mtime = self.loaded_mtime or (
-                os.path.getmtime(self.sav_path) if os.path.exists(self.sav_path) else 0.0
-            )
-            save_tokens(self.tokens, mtime)
+            save_tokens(self.sav_path, self.tokens)
 
         self._update_buttons()
 

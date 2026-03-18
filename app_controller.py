@@ -48,7 +48,7 @@ class AppController:
             "trash":   raw["trash"],
         }
         self.golds  = load_gold(self.sav_path)
-        self.tokens = load_tokens(self.loaded_mtime)
+        self.tokens = load_tokens(self.sav_path)
         self.items_pool = load_items_pool()
         self.save_properties = load_save_properties(self.sav_path, SAVE_INFO_KEYS)
         self.save_properties["_cats_count"] = str(load_cats_count(self.sav_path))
@@ -140,7 +140,7 @@ class AppController:
         if rarity in self.tokens:
             self.tokens[rarity] += 1
         self.save_inventories()
-        save_tokens(self.tokens, self.loaded_mtime)
+        save_tokens(self.sav_path, self.tokens)
 
     # ------------------------------------------------------------------
     # Sacrifice — multiple items (storage)
@@ -167,7 +167,7 @@ class AppController:
             del inventory.items[idx]
             inventory.count -= 1
         self.save_inventories()
-        save_tokens(self.tokens, self.loaded_mtime)
+        save_tokens(self.sav_path, self.tokens)
 
     # ------------------------------------------------------------------
     # Sacrifice — all non-broken trash items
@@ -199,7 +199,7 @@ class AppController:
         inventory.count = len(keep_items)
         self.inv_items["Trash"] = inventory.items  # keep reference in sync
         self.save_inventories()
-        save_tokens(self.tokens, self.loaded_mtime)
+        save_tokens(self.sav_path, self.tokens)
 
     # ------------------------------------------------------------------
     # Move item between storage ↔ trash
@@ -279,7 +279,7 @@ class AppController:
         storage.count += 1
 
         self.save_inventories()
-        save_tokens(self.tokens, self.loaded_mtime)
+        save_tokens(self.sav_path, self.tokens)
 
     # ------------------------------------------------------------------
     # Clone pool item to storage (debug only)
