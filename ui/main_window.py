@@ -189,7 +189,7 @@ def used_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
     painter.drawPixmap(0, 0, pixmap)
 
     icon_size = pixmap.width()
-    badge_r   = max(8, icon_size // 4)   # circle radius
+    badge_r   = max(4, icon_size // 8)   # circle radius (50% smaller)
     cx        = icon_size - badge_r - 1  # center X (top-right)
     cy        = badge_r + 1              # center Y
 
@@ -201,7 +201,7 @@ def used_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
 
     # "U" letter
     font = QFont()
-    font.setPixelSize(max(8, badge_r))
+    font.setPixelSize(max(4, badge_r))
     font.setBold(True)
     painter.setFont(font)
     painter.setPen(QPen(Qt.GlobalColor.white))
