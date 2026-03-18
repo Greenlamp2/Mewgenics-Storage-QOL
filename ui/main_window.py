@@ -216,6 +216,8 @@ class MainWindow(QMainWindow):
     def __init__(self, sav_path: str):
         super().__init__()
         self.setWindowTitle(f"Mewgenics Storage QOL  {APP_VERSION}")
+        _app_icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "tokens", "very_rare.png")
+        self.setWindowIcon(QIcon(_app_icon_path))
         self.resize(960, 640)
 
         self.sav_path = sav_path

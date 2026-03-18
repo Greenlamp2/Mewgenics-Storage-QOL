@@ -10,7 +10,7 @@ import os
 import random
 
 from PySide6.QtCore import Qt, Signal, QTimer, QPropertyAnimation, QEasingCurve, QUrl
-from PySide6.QtGui import QPixmap, QPainter
+from PySide6.QtGui import QPixmap, QPainter, QIcon
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -357,6 +357,7 @@ class LootboxDialog(QDialog):
                  loaded_mtime: float | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"Lootbox — {RARITY_LABEL.get(rarity, rarity)}")
+        self.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "tokens", "very_rare.png")))
         self.setMinimumWidth(700)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
@@ -645,6 +646,7 @@ class TokenShopDialog(QDialog):
                  loaded_mtime: float | None = None, debug: bool = False):
         super().__init__(parent)
         self.setWindowTitle("Token Shop")
+        self.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "tokens", "very_rare.png")))
         self.setMinimumWidth(740)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
