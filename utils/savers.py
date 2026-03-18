@@ -63,6 +63,30 @@ def save_gold(path, gold):
     conn.close()
 
 
+def save_bank_inventory(path: str, inventory):
+    """Persist the bank inventory to the 'bank' table in the save file.
+
+    Schema: bank (key TEXT PRIMARY KEY, data BLOB)
+    An empty inventory is stored as a minimal blob (count = 0).
+    """
+    blob = build_inventory_blob(inventory.raws)
+    if blob is None:
+        # Empty inventory: write a 4-byte little-endian 0 (count = 0)
+        import struct
+        blob = struct.pack("<I", 0)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS bank "
+        "(key TEXT PRIMARY KEY, data BLOB);"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO bank (key, data) VALUES ('inventory_bank', ?);",
+        (blob,),
+    )
+    conn.commit()
+    conn.close()
+
+
 def save_tokens(sav_path: str, tokens: dict):
     """Persist token counts to the 'custom' table in the save file.
 

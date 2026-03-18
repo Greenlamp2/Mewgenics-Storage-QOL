@@ -17,7 +17,7 @@ from app_controller import AppController, EXCLUDED_RARITIES
 from version import APP_VERSION
 
 # mapping tab label → save_inventories key
-TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
+TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash", "Bank": "bank"}
 
 DEBUG_MODE = False   # set to True to enable debug actions (e.g.: Clone to Storage from Pool)
 
@@ -252,7 +252,10 @@ class MainWindow(QMainWindow):
 
         self.tab_bar = QTabBar()
         for label in self.ctrl.inv_items:
-            self.tab_bar.addTab(label)
+            if label not in ("Bank", "Pool"):
+                self.tab_bar.addTab(label)
+        self.tab_bar.addTab("Bank")
+        self.tab_bar.addTab("Pool")
         self.tab_bar.addTab("Save Info")
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
 
@@ -437,6 +440,16 @@ class MainWindow(QMainWindow):
         )
         self.move_btn.clicked.connect(self._move_item)
 
+        self.bank_btn = QPushButton()
+        self.bank_btn.setVisible(False)
+        self.bank_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
+            " background: #1565c0; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #0d47a1; }"
+            "QPushButton:pressed { background: #082f6b; }"
+        )
+        self.bank_btn.clicked.connect(self._move_bank_item)
+
         self.send_gift_btn = QPushButton("🎁 Send Gift")
         self.send_gift_btn.setVisible(False)
         self.send_gift_btn.setStyleSheet(
@@ -454,6 +467,7 @@ class MainWindow(QMainWindow):
         detail_layout.addWidget(self.sacrifice_btn)
         detail_layout.addWidget(self.repair_btn)
         detail_layout.addWidget(self.move_btn)
+        detail_layout.addWidget(self.bank_btn)
         detail_layout.addWidget(self.send_gift_btn)
         detail_layout.addWidget(self.clone_to_storage_btn)
         detail_layout.addStretch()
@@ -834,6 +848,7 @@ class MainWindow(QMainWindow):
         self.sacrifice_btn.setVisible(False)
         self.repair_btn.setVisible(False)
         self.move_btn.setVisible(False)
+        self.bank_btn.setVisible(False)
         self.send_gift_btn.setVisible(False)
         self.clone_to_storage_btn.setVisible(False)
 
@@ -1174,6 +1189,7 @@ class MainWindow(QMainWindow):
         self.detail_info.setText("<br>".join(lines))
 
         is_pool_tab = current_tab == "Pool"
+        is_bank_tab = current_tab == "Bank"
         is_broken   = getattr(item, "broken", False)
         is_locked   = getattr(item, "locked", False)
 
@@ -1181,10 +1197,20 @@ class MainWindow(QMainWindow):
             self.sacrifice_btn.setVisible(False)
             self.repair_btn.setVisible(False)
             self.move_btn.setVisible(False)
+            self.bank_btn.setVisible(False)
             self.send_gift_btn.setVisible(False)
             self.clone_to_storage_btn.setVisible(
                 DEBUG_MODE and is_pool_tab and not is_locked
             )
+        elif is_bank_tab:
+            # Bank tab: only allow withdrawing back to storage
+            self.clone_to_storage_btn.setVisible(False)
+            self.sacrifice_btn.setVisible(False)
+            self.repair_btn.setVisible(False)
+            self.move_btn.setVisible(False)
+            self.send_gift_btn.setVisible(False)
+            self.bank_btn.setText("📤 Move to Storage")
+            self.bank_btn.setVisible(True)
         else:
             self.clone_to_storage_btn.setVisible(False)
             token_label = (
@@ -1199,6 +1225,13 @@ class MainWindow(QMainWindow):
                     "🗑 Move to Trash" if current_tab == "Storage" else "📦 Move to Storage"
                 )
             self.move_btn.setVisible(not is_broken)
+
+            # Bank button — only for storage items
+            if current_tab == "Storage" and not is_broken:
+                self.bank_btn.setText("🏦 Move to Bank")
+                self.bank_btn.setVisible(True)
+            else:
+                self.bank_btn.setVisible(False)
 
             # Gift button — only for storage items that aren't broken
             ctx = self.ctrl.get_gift_context()
@@ -1354,6 +1387,25 @@ class MainWindow(QMainWindow):
         self._refresh_sacrifice_all_btn()
         self._populate(self.ctrl.inv_items[origin_tab])
 
+    def _move_bank_item(self):
+        """Handle the bank_btn: Storage → Bank or Bank → Storage."""
+        if self._selected_item_idx is None or self._selected_inv_key is None:
+            return
+        if not self._confirm_if_save_changed():
+            return
+        origin_tab = self._selected_inv_key
+        if origin_tab == "Storage":
+            self.ctrl.apply_move_to_bank(self._selected_item_idx)
+        else:  # Bank tab
+            self.ctrl.apply_move_from_bank(self._selected_item_idx)
+        self._selected_item_idx = None
+        self._selected_btn = None
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._refresh_pool_tab_title()
+        self._populate(self.ctrl.inv_items[origin_tab])
+
     def _sacrifice_all_trash(self):
         if not self._confirm_if_save_changed():
             return
@@ -1492,15 +1544,14 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Receive Gift", "No pending gifts.")
             return
 
-        # Refresh storage tab
+        # Refresh the Bank tab if it is currently active; always keep inv_items in sync
         current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
-        if current_tab == "Storage":
+        if current_tab == "Bank":
             self._clear_grid()
             self._clear_detail()
             self._hide_all_action_btns()
-            self._populate(self.ctrl.inv_items["Storage"])
-        # Also keep inv_items in sync for other tabs
-        self.ctrl.inv_items["Storage"] = self.ctrl.inventories["storage"].items
+            self._populate(self.ctrl.inv_items["Bank"])
+        self.ctrl.inv_items["Bank"] = self.ctrl.inventories["bank"].items
         # Refresh pool tab title in case new items were discovered via the gift
         self._refresh_pool_tab_title()
 
@@ -1510,7 +1561,7 @@ class MainWindow(QMainWindow):
         items_html = "<br>".join(f"• {n}" for n in names)
         QMessageBox.information(
             self, "Gifts Received!",
-            f"<b>{len(received)}</b> item(s) added to Storage:<br><br>{items_html}"
+            f"<b>{len(received)}</b> item(s) added to Bank:<br><br>{items_html}"
         )
 
     # ------------------------------------------------------------------

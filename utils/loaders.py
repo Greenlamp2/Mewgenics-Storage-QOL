@@ -61,6 +61,31 @@ def load_inventories(path):
         'trash': trash,
     }
 
+
+def load_bank_inventory(path: str) -> Inventory:
+    """Load the bank inventory from the 'bank' table in the save file.
+
+    The table is created automatically if it does not exist yet.
+    Schema: bank (key TEXT PRIMARY KEY, data BLOB)
+    The inventory blob is stored under key 'inventory_bank'.
+    """
+    if not os.path.exists(path):
+        return Inventory(None)
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS bank "
+            "(key TEXT PRIMARY KEY, data BLOB);"
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT data FROM bank WHERE key='inventory_bank';"
+        ).fetchone()
+        conn.close()
+        return Inventory(row[0] if row else None)
+    except Exception:
+        return Inventory(None)
+
 def load_gold(path):
     conn = sqlite3.connect(path)
     row = conn.execute("SELECT key, data FROM properties WHERE key='house_gold'").fetchone()

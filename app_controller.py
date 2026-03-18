@@ -9,8 +9,9 @@ import os
 from parse.item import Item, GhostItem
 from catalogs.itemcatalog import item_catalog
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, \
-    load_save_properties, load_cats_count, SAVE_INFO_KEYS
-from utils.savers import save_inventories as _save_inventories, save_tokens, save_items_pool
+    load_save_properties, load_cats_count, load_bank_inventory, SAVE_INFO_KEYS
+from utils.savers import save_inventories as _save_inventories, save_tokens, \
+    save_bank_inventory, save_items_pool
 
 # Rarities that should never appear in any view
 EXCLUDED_RARITIES = {"sidequest", "quest"}
@@ -46,6 +47,7 @@ class AppController:
         self.inventories = {
             "storage": raw["storage"],
             "trash":   raw["trash"],
+            "bank":    load_bank_inventory(self.sav_path),
         }
         self.golds  = load_gold(self.sav_path)
         self.tokens = load_tokens(self.sav_path)
@@ -80,6 +82,7 @@ class AppController:
         self.inv_items = {
             "Storage": self.inventories["storage"].items,
             "Trash":   self.inventories["trash"].items,
+            "Bank":    self.inventories["bank"].items,
             "Pool":    self.pool_items + self.undiscovered_pool_items,
         }
 
@@ -90,6 +93,7 @@ class AppController:
     def save_inventories(self):
         """Persist inventories to disk and refresh loaded_mtime."""
         _save_inventories(self.sav_path, self.inventories)
+        save_bank_inventory(self.sav_path, self.inventories["bank"])
         try:
             self.loaded_mtime = os.path.getmtime(self.sav_path)
         except OSError:
@@ -242,6 +246,68 @@ class AppController:
         self.save_inventories()
 
     # ------------------------------------------------------------------
+    # Bank — move items between storage ↔ bank
+    # ------------------------------------------------------------------
+
+    def apply_move_to_bank(self, storage_idx: int):
+        """Move item at *storage_idx* from storage to the bank, persist.
+
+        Also adds the item to items_pool if it has not been discovered yet,
+        following the same rules as load_data().
+        """
+        storage = self.inventories["storage"]
+        bank    = self.inventories["bank"]
+
+        raw = storage.raws[storage_idx]
+        del storage.raws[storage_idx]
+        del storage.items[storage_idx]
+        storage.count -= 1
+
+        new_seq = max((r.get("seqId", 0) for r in bank.raws), default=0) + 1
+        new_raw = {**raw, "seqId": new_seq}
+        bank.raws.append(new_raw)
+        bank.items.append(Item(new_raw))
+        bank.count += 1
+
+        self.save_inventories()
+
+        # ── Pool auto-discovery (same rule as load_data) ──────────────
+        name = new_raw.get("name")
+        if name and name not in self.items_pool:
+            self.items_pool[name] = new_raw
+            save_items_pool(self.items_pool)
+            self.pool_items = [Item(r) for r in self.items_pool.values()]
+            discovered_names = set(self.items_pool.keys())
+            all_catalog = item_catalog.get_all_non_quest_items()
+            self.undiscovered_pool_items = [
+                GhostItem(n, details)
+                for n, details in all_catalog.items()
+                if n not in discovered_names
+                and details is not None
+                and details.get("rarity") not in EXCLUDED_RARITIES
+                and details.get("rarity") is not None
+            ]
+            self.inv_items["Pool"] = self.pool_items + self.undiscovered_pool_items
+
+    def apply_move_from_bank(self, bank_idx: int):
+        """Move item at *bank_idx* from the bank back to storage, persist."""
+        bank    = self.inventories["bank"]
+        storage = self.inventories["storage"]
+
+        raw = bank.raws[bank_idx]
+        del bank.raws[bank_idx]
+        del bank.items[bank_idx]
+        bank.count -= 1
+
+        new_seq = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
+        new_raw = {**raw, "seqId": new_seq}
+        storage.raws.append(new_raw)
+        storage.items.append(Item(new_raw))
+        storage.count += 1
+
+        self.save_inventories()
+
+    # ------------------------------------------------------------------
     # Repair broken item (trash → storage)
     # ------------------------------------------------------------------
 
@@ -354,7 +420,7 @@ class AppController:
         return len(indices)
 
     def apply_receive_gifts(self) -> list[dict]:
-        """Fetch all pending gifts, add them to storage and pool, persist. Returns the raw items."""
+        """Fetch all pending gifts, add them to the bank and pool, persist. Returns the raw items."""
         from utils.gift_manager import receive_gifts, get_steam_id_from_path
         my_id = get_steam_id_from_path(self.sav_path)
         if my_id is None:
@@ -364,18 +430,18 @@ class AppController:
         if not raw_items:
             return []
 
-        storage      = self.inventories["storage"]
+        bank         = self.inventories["bank"]
         pool_changed = False
 
         for raw in raw_items:
-            new_seq_id = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
+            new_seq_id = max((r.get("seqId", 0) for r in bank.raws), default=0) + 1
             new_raw    = {**raw, "seqId": new_seq_id}
             # Normalize subname key so it round-trips correctly
             if "subname" in new_raw and "subName" not in new_raw:
                 new_raw["subName"] = new_raw.pop("subname")
-            storage.raws.append(new_raw)
-            storage.items.append(Item(new_raw))
-            storage.count += 1
+            bank.raws.append(new_raw)
+            bank.items.append(Item(new_raw))
+            bank.count += 1
 
             # Add to pool if not already discovered (same rule as load_data)
             name = new_raw.get("name")
