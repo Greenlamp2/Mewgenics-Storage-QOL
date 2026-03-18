@@ -969,6 +969,11 @@ class MainWindow(QMainWindow):
         # Refresh the storage grid immediately when items are confirmed in a lootbox,
         # without waiting for the Token Shop dialog to close.
         dialog.items_added.connect(self._reload)
+        # Update the token counter in real-time whenever tokens are spent or refunded.
+        def _on_tokens_changed(new_tokens: dict):
+            self.ctrl.tokens.update(new_tokens)
+            self._sync_token_labels()
+        dialog.tokens_changed.connect(_on_tokens_changed)
         dialog.exec()
         self._reload()                   # sync loaded_mtime + refresh grid
         self._poll_timer.start()         # resume external-change detection

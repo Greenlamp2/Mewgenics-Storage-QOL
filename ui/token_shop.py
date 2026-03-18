@@ -30,6 +30,7 @@ RARITIES_IN_SHOP = ("common", "uncommon", "rare", "very_rare")
 TOKEN_COST        = 5
 ITEMS_PER_LOOTBOX = 12
 MAX_PICKS         = 3
+REFUND_AMOUNT     = 3   # tokens refunded when the player refuses a lootbox
 
 # Per-rarity probability table for items INSIDE each lootbox tier
 LOOT_DISTRIBUTIONS: dict[str, dict[str, float]] = {
@@ -371,6 +372,7 @@ class LootboxDialog(QDialog):
         self.loot_items: list[Item]     = self._generate_items()
         self.selected_indices: set[int] = set()
         self.cards: list[ItemCard]      = []
+        self.refused: bool              = False   # set to True when player refuses
 
         # Animation state
         self._reveal_index:  int        = 0
@@ -502,6 +504,20 @@ class LootboxDialog(QDialog):
         self.confirm_btn.clicked.connect(self._confirm)
         vbox.addWidget(self.confirm_btn)
 
+        # Refuse button (refund)
+        rarity_label = RARITY_LABEL.get(self.lootbox_rarity, self.lootbox_rarity)
+        self.refuse_btn = QPushButton(
+            f"🚫  Refuse  (get {REFUND_AMOUNT} {rarity_label} token{'s' if REFUND_AMOUNT != 1 else ''} back)"
+        )
+        self.refuse_btn.setStyleSheet(
+            "QPushButton { font-size: 12px; font-weight: bold; padding: 7px 20px;"
+            " background: #3a2020; color: #e57373; border: 1px solid #7a3030;"
+            " border-radius: 6px; }"
+            "QPushButton:hover { background: #4a2020; border-color: #c06060; }"
+        )
+        self.refuse_btn.clicked.connect(self._refuse)
+        vbox.addWidget(self.refuse_btn)
+
     # ------------------------------------------------------------------
     # Reveal animation
     # ------------------------------------------------------------------
@@ -593,6 +609,26 @@ class LootboxDialog(QDialog):
         self.confirm_btn.setEnabled(n == MAX_PICKS)
 
     # ------------------------------------------------------------------
+    # Refuse (refund)
+    # ------------------------------------------------------------------
+
+    def _refuse(self):
+        rarity_label = RARITY_LABEL.get(self.lootbox_rarity, self.lootbox_rarity)
+        reply = QMessageBox.question(
+            self,
+            "Refuse Lootbox?",
+            f"Are you sure you want to refuse this lootbox?\n\n"
+            f"You will be refunded {REFUND_AMOUNT} {rarity_label} "
+            f"token{'s' if REFUND_AMOUNT != 1 else ''} but will not receive any item.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.refused = True
+        self.reject()
+
+    # ------------------------------------------------------------------
     # Confirm
     # ------------------------------------------------------------------
 
@@ -639,7 +675,8 @@ class LootboxDialog(QDialog):
 # ──────────────────────────────────────────────────────────────────────
 
 class TokenShopDialog(QDialog):
-    items_added = Signal()   # emitted right after a lootbox is confirmed
+    items_added    = Signal()      # emitted right after a lootbox is confirmed
+    tokens_changed = Signal(dict)  # emitted whenever token counts change (spend or refund)
 
     def __init__(self, parent, tokens: dict, pool_items: list, items_pool: dict,
                  sav_path: str, inventories: dict,
@@ -780,6 +817,7 @@ class TokenShopDialog(QDialog):
                 self.loaded_mtime = os.path.getmtime(self.sav_path)
             except OSError:
                 pass
+            self.tokens_changed.emit(dict(self.tokens))
 
         self._update_buttons()
 
@@ -800,4 +838,14 @@ class TokenShopDialog(QDialog):
             pass
         if dlg.result() == QDialog.DialogCode.Accepted:
             self.items_added.emit()
+        elif dlg.refused:
+            # Player refused — refund REFUND_AMOUNT tokens
+            self.tokens[rarity] = self.tokens.get(rarity, 0) + REFUND_AMOUNT
+            save_tokens(self.sav_path, self.tokens)
+            try:
+                self.loaded_mtime = os.path.getmtime(self.sav_path)
+            except OSError:
+                pass
+            self.tokens_changed.emit(dict(self.tokens))
+        self._update_buttons()
 
