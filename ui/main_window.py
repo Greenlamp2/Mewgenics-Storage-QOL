@@ -19,7 +19,7 @@ from version import APP_VERSION
 # mapping tab label → save_inventories key
 TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash"}
 
-DEBUG_MODE = False   # set to True to enable debug actions (e.g.: Clone to Storage from Pool)
+DEBUG_MODE = True   # set to True to enable debug actions (e.g.: Clone to Storage from Pool)
 
 ICON_DIR    = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "img")
 MONEY_ICON  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "money.png")
@@ -185,11 +185,18 @@ def locked_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
 def svg_to_pixmap(svg_path: str, size: int) -> QPixmap:
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
-    if os.path.exists(svg_path):
+    if not os.path.exists(svg_path):
+        return pixmap
+    if svg_path.lower().endswith('.svg'):
         renderer = QSvgRenderer(svg_path)
         painter = QPainter(pixmap)
         renderer.render(painter)
         painter.end()
+    else:
+        loaded = QPixmap(svg_path)
+        if not loaded.isNull():
+            pixmap = loaded.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                                   Qt.TransformationMode.SmoothTransformation)
     return pixmap
 
 
@@ -642,6 +649,9 @@ class MainWindow(QMainWindow):
             loaded_mtime=self.ctrl.loaded_mtime,
             debug=DEBUG_MODE,
         )
+        # Refresh the storage grid immediately when items are confirmed in a lootbox,
+        # without waiting for the Token Shop dialog to close.
+        dialog.items_added.connect(self._reload)
         dialog.exec()
         self._reload()                   # sync loaded_mtime + refresh grid
         self._poll_timer.start()         # resume external-change detection

@@ -28,6 +28,12 @@ class Item:
         self.passives = self.details.get('passives', {})
         icon_name_raw = self.details.get('name_resolved', None) or self.details.get('desc')
         self.icon_name = item_catalog.solve_icon_name(icon_name_raw)
+        # Syringe modifier items: use dedicated syringe icon
+        name_resolved = (self.details.get('name_resolved') or '').lower()
+        if self.category == 'modifiers' and (
+            'syringe' in (self.name or '').lower() or 'syringe' in name_resolved
+        ):
+            self.icon_name = '../misc/sysinge.png'
         self.rarity = self.details.get('rarity')
         try:
             if 'consumable' in self.rarity:
@@ -52,6 +58,12 @@ class GhostItem:
 
         icon_name_raw = self.details.get("name_resolved") or self.details.get("desc")
         self.icon_name = item_catalog.solve_icon_name(icon_name_raw) if icon_name_raw else None
+        # Syringe modifier items: use dedicated syringe icon
+        name_resolved = (self.details.get('name_resolved') or '').lower()
+        if self.category == 'modifiers' and (
+            'syringe' in (self.name or '').lower() or 'syringe' in name_resolved
+        ):
+            self.icon_name = '../misc/sysinge.png'
 
         rarity = self.details.get("rarity", "common") or "common"
         if "consumable" in rarity:

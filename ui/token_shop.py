@@ -78,11 +78,18 @@ RARITY_LABEL = {
 def svg_to_pixmap(svg_path: str, size: int) -> QPixmap:
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
-    if os.path.exists(svg_path):
+    if not os.path.exists(svg_path):
+        return pixmap
+    if svg_path.lower().endswith('.svg'):
         renderer = QSvgRenderer(svg_path)
         painter  = QPainter(pixmap)
         renderer.render(painter)
         painter.end()
+    else:
+        loaded = QPixmap(svg_path)
+        if not loaded.isNull():
+            pixmap = loaded.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                                   Qt.TransformationMode.SmoothTransformation)
     return pixmap
 
 
@@ -558,6 +565,8 @@ class LootboxDialog(QDialog):
 # ──────────────────────────────────────────────────────────────────────
 
 class TokenShopDialog(QDialog):
+    items_added = Signal()   # emitted right after a lootbox is confirmed
+
     def __init__(self, parent, tokens: dict, pool_items: list, items_pool: dict,
                  sav_path: str, inventories: dict,
                  loaded_mtime: float | None = None, debug: bool = False):
@@ -707,4 +716,6 @@ class TokenShopDialog(QDialog):
             loaded_mtime=self.loaded_mtime,
         )
         dlg.exec()
+        if dlg.result() == QDialog.DialogCode.Accepted:
+            self.items_added.emit()
 
