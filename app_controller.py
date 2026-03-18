@@ -94,6 +94,10 @@ class AppController:
         """Persist inventories to disk and refresh loaded_mtime."""
         _save_inventories(self.sav_path, self.inventories)
         save_bank_inventory(self.sav_path, self.inventories["bank"])
+        self._refresh_mtime()
+
+    def _refresh_mtime(self):
+        """Update loaded_mtime to the current file mtime (call after every write)."""
         try:
             self.loaded_mtime = os.path.getmtime(self.sav_path)
         except OSError:
@@ -145,25 +149,26 @@ class AppController:
             self.tokens[rarity] += 1
         self.save_inventories()
         save_tokens(self.sav_path, self.tokens)
+        self._refresh_mtime()
 
     # ------------------------------------------------------------------
     # Sacrifice — multiple items (storage)
     # ------------------------------------------------------------------
 
-    def get_sacrifice_multiple_gains(self, storage_indices: list[int]) -> dict[str, int]:
-        """Return {rarity: count} for a set of storage indices (no side effects)."""
+    def get_sacrifice_multiple_gains(self, indices: list[int], inv_key: str = "storage") -> dict[str, int]:
+        """Return {rarity: count} for a set of indices in *inv_key* (no side effects)."""
         gains: dict[str, int] = {}
-        inventory = self.inventories["storage"]
-        for idx in storage_indices:
+        inventory = self.inventories[inv_key]
+        for idx in indices:
             r = inventory.items[idx].rarity
             if r in self.tokens:
                 gains[r] = gains.get(r, 0) + 1
         return gains
 
-    def apply_sacrifice_multiple(self, storage_indices: list[int]):
-        """Remove items in reverse-index order, award tokens, persist."""
-        inventory = self.inventories["storage"]
-        for idx in sorted(storage_indices, reverse=True):
+    def apply_sacrifice_multiple(self, indices: list[int], inv_key: str = "storage"):
+        """Remove items in reverse-index order from *inv_key*, award tokens, persist."""
+        inventory = self.inventories[inv_key]
+        for idx in sorted(indices, reverse=True):
             rarity = inventory.items[idx].rarity
             if rarity in self.tokens:
                 self.tokens[rarity] += 1
@@ -172,6 +177,7 @@ class AppController:
             inventory.count -= 1
         self.save_inventories()
         save_tokens(self.sav_path, self.tokens)
+        self._refresh_mtime()
 
     # ------------------------------------------------------------------
     # Sacrifice — all non-broken trash items
@@ -204,6 +210,7 @@ class AppController:
         self.inv_items["Trash"] = inventory.items  # keep reference in sync
         self.save_inventories()
         save_tokens(self.sav_path, self.tokens)
+        self._refresh_mtime()
 
     # ------------------------------------------------------------------
     # Move item between storage ↔ trash
@@ -243,6 +250,22 @@ class AppController:
             trash.raws.append(new_raw)
             trash.items.append(Item(new_raw))
             trash.count += 1
+        self.save_inventories()
+
+    def apply_move_multiple_to_storage(self, src_key: str, indices: list[int]):
+        """Move multiple items from *src_key* inventory to storage in reverse-index order, persist."""
+        src     = self.inventories[src_key]
+        storage = self.inventories["storage"]
+        for idx in sorted(indices, reverse=True):
+            raw = src.raws[idx]
+            del src.raws[idx]
+            del src.items[idx]
+            src.count -= 1
+            new_seq = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
+            new_raw = {**raw, "seqId": new_seq}
+            storage.raws.append(new_raw)
+            storage.items.append(Item(new_raw))
+            storage.count += 1
         self.save_inventories()
 
     # ------------------------------------------------------------------
@@ -307,6 +330,55 @@ class AppController:
 
         self.save_inventories()
 
+    def apply_move_multiple_to_bank(self, src_key: str, indices: list[int]):
+        """Move multiple items from *src_key* inventory to the bank in reverse-index order, persist."""
+        src  = self.inventories[src_key]
+        bank = self.inventories["bank"]
+        for idx in sorted(indices, reverse=True):
+            raw = src.raws[idx]
+            del src.raws[idx]
+            del src.items[idx]
+            src.count -= 1
+            new_seq = max((r.get("seqId", 0) for r in bank.raws), default=0) + 1
+            new_raw = {**raw, "seqId": new_seq}
+            bank.raws.append(new_raw)
+            bank.items.append(Item(new_raw))
+            bank.count += 1
+            # Pool auto-discovery
+            name = new_raw.get("name")
+            if name and name not in self.items_pool:
+                self.items_pool[name] = new_raw
+        self.save_inventories()
+        save_items_pool(self.items_pool)
+        self.pool_items = [Item(r) for r in self.items_pool.values()]
+        discovered_names = set(self.items_pool.keys())
+        all_catalog = item_catalog.get_all_non_quest_items()
+        self.undiscovered_pool_items = [
+            GhostItem(n, details)
+            for n, details in all_catalog.items()
+            if n not in discovered_names
+            and details is not None
+            and details.get("rarity") not in EXCLUDED_RARITIES
+            and details.get("rarity") is not None
+        ]
+        self.inv_items["Pool"] = self.pool_items + self.undiscovered_pool_items
+
+    def apply_move_multiple_from_bank(self, indices: list[int]):
+        """Move multiple bank items back to storage in reverse-index order, persist."""
+        bank    = self.inventories["bank"]
+        storage = self.inventories["storage"]
+        for idx in sorted(indices, reverse=True):
+            raw = bank.raws[idx]
+            del bank.raws[idx]
+            del bank.items[idx]
+            bank.count -= 1
+            new_seq = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
+            new_raw = {**raw, "seqId": new_seq}
+            storage.raws.append(new_raw)
+            storage.items.append(Item(new_raw))
+            storage.count += 1
+        self.save_inventories()
+
     # ------------------------------------------------------------------
     # Repair broken item (trash → storage)
     # ------------------------------------------------------------------
@@ -346,6 +418,7 @@ class AppController:
 
         self.save_inventories()
         save_tokens(self.sav_path, self.tokens)
+        self._refresh_mtime()
 
     # ------------------------------------------------------------------
     # Clone pool item to storage (debug only)

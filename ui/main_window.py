@@ -368,12 +368,28 @@ class MainWindow(QMainWindow):
                                         "QPushButton:hover { background: #6a1b9a; }")
         ms_sacrifice_btn.clicked.connect(self._sacrifice_selected)
         ms_layout.addWidget(ms_sacrifice_btn)
+        self.ms_sacrifice_btn = ms_sacrifice_btn
 
         ms_trash_btn = QPushButton("🗑 Trash")
         ms_trash_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #555; }"
                                     "QPushButton:hover { background: #444; }")
         ms_trash_btn.clicked.connect(self._move_selected_to_trash)
         ms_layout.addWidget(ms_trash_btn)
+        self.ms_trash_btn = ms_trash_btn
+
+        self.ms_to_bank_btn = QPushButton("🏦 Send to Bank")
+        self.ms_to_bank_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #1565c0; }"
+                                           "QPushButton:hover { background: #0d47a1; }")
+        self.ms_to_bank_btn.setVisible(False)
+        self.ms_to_bank_btn.clicked.connect(self._move_selected_to_bank)
+        ms_layout.addWidget(self.ms_to_bank_btn)
+
+        self.ms_to_storage_btn = QPushButton("📦 Move to Storage")
+        self.ms_to_storage_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #00695c; }"
+                                              "QPushButton:hover { background: #00564a; }")
+        self.ms_to_storage_btn.setVisible(False)
+        self.ms_to_storage_btn.clicked.connect(self._move_selected_from_bank)
+        ms_layout.addWidget(self.ms_to_storage_btn)
 
         self.ms_gift_btn = QPushButton("🎁 Send Gift")
         self.ms_gift_btn.setStyleSheet(_ms_btn_style + "QPushButton { background: #6a3d9a; }"
@@ -1123,15 +1139,29 @@ class MainWindow(QMainWindow):
             )
 
     def _refresh_multi_bar(self):
-        n          = len(self._multi_selection)
-        in_storage = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex())) == "Storage"
-        visible    = n > 0 and in_storage
+        n           = len(self._multi_selection)
+        current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
+        visible     = n > 0 and current_tab in ("Storage", "Trash", "Bank")
         self.multi_select_bar.setVisible(visible)
-        if visible:
-            self.multi_select_count_lbl.setText(
-                f"{n} item{'s' if n != 1 else ''} selected  (Ctrl+click to add/remove)"
-            )
-            # Show gift button only when gift is configured
+        if not visible:
+            return
+
+        self.multi_select_count_lbl.setText(
+            f"{n} item{'s' if n != 1 else ''} selected  (Ctrl+click to add/remove)"
+        )
+
+        # Buttons visibility per tab
+        is_storage = current_tab == "Storage"
+        is_trash   = current_tab == "Trash"
+        is_bank    = current_tab == "Bank"
+
+        self.ms_sacrifice_btn.setVisible(is_storage or is_trash)
+        self.ms_trash_btn.setVisible(is_storage)
+        self.ms_to_bank_btn.setVisible(is_trash or is_storage)
+        self.ms_to_storage_btn.setVisible(is_bank or is_trash)
+
+        # Gift button — only for Storage
+        if is_storage:
             try:
                 ctx = self.ctrl.get_gift_context()
                 if ctx.get("is_known_user"):
@@ -1141,6 +1171,8 @@ class MainWindow(QMainWindow):
                     self.ms_gift_btn.setVisible(False)
             except Exception:
                 self.ms_gift_btn.setVisible(False)
+        else:
+            self.ms_gift_btn.setVisible(False)
 
     def _clear_multi_selection(self):
         for btn in self._multi_selection.values():
@@ -1156,8 +1188,8 @@ class MainWindow(QMainWindow):
     def _on_select(self, idx: int, btn: QToolButton, items, multi: bool = False):
         current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
 
-        # ── Ctrl+Click in Storage → toggle multi-selection ────────────
-        if multi and current_tab == "Storage":
+        # ── Ctrl+Click in Storage / Trash / Bank → toggle multi-selection ────────────
+        if multi and current_tab in ("Storage", "Trash", "Bank"):
             if getattr(items[idx], "locked", False):
                 return
             if idx in self._multi_selection:
@@ -1180,8 +1212,13 @@ class MainWindow(QMainWindow):
             else:
                 self.detail_icon.clear()
                 self.detail_name.setText(f"{n} item{'s' if n != 1 else ''} selected")
+                _hint = {
+                    "Storage": "sacrifice, trash, or send to bank.",
+                    "Trash":   "sacrifice or send to bank.",
+                    "Bank":    "move back to storage.",
+                }.get(current_tab, "use the bar above.")
                 self.detail_info.setText(
-                    '<span style="color:#888">Use the bar above to sacrifice<br>or move to trash.</span>'
+                    f'<span style="color:#888">Use the bar above to {_hint}</span>'
                 )
                 self._hide_all_action_btns()
             return
@@ -1270,9 +1307,9 @@ class MainWindow(QMainWindow):
                 )
             self.move_btn.setVisible(not is_broken)
 
-            # Bank button — only for storage items
-            if current_tab == "Storage" and not is_broken:
-                self.bank_btn.setText("🏦 Move to Bank")
+            # Bank button — Storage and Trash items (non-broken)
+            if current_tab in ("Storage", "Trash") and not is_broken:
+                self.bank_btn.setText("🏦 Send to Bank")
                 self.bank_btn.setVisible(True)
             else:
                 self.bank_btn.setVisible(False)
@@ -1294,8 +1331,10 @@ class MainWindow(QMainWindow):
             return
         if not self._confirm_if_save_changed():
             return
-        indices = sorted(self._multi_selection.keys())
-        gains   = self.ctrl.get_sacrifice_multiple_gains(indices)
+        current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
+        inv_key     = TAB_TO_INV_KEY.get(current_tab, "storage")
+        indices     = sorted(self._multi_selection.keys())
+        gains       = self.ctrl.get_sacrifice_multiple_gains(indices, inv_key)
         if not gains:
             return
 
@@ -1316,13 +1355,14 @@ class MainWindow(QMainWindow):
         if msg.exec() != QMessageBox.StandardButton.Yes:
             return
 
-        self.ctrl.apply_sacrifice_multiple(indices)
+        self.ctrl.apply_sacrifice_multiple(indices, inv_key)
         self._sync_token_labels()
         self._clear_multi_selection()
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
-        self._populate(self.ctrl.inv_items["Storage"])
+        self._refresh_sacrifice_all_btn()
+        self._populate(self.ctrl.inv_items[current_tab])
 
     def _move_selected_to_trash(self):
         if not self._multi_selection:
@@ -1399,6 +1439,61 @@ class MainWindow(QMainWindow):
     # Single-item actions
     # ------------------------------------------------------------------
 
+    def _move_selected_to_bank(self):
+        """Multi-select: move items from Storage or Trash to the Bank."""
+        if not self._multi_selection:
+            return
+        if not self._confirm_if_save_changed():
+            return
+        current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
+        inv_key     = TAB_TO_INV_KEY.get(current_tab, "storage")
+        indices     = sorted(self._multi_selection.keys())
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Send to Bank")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(f"Move <b>{len(indices)} item(s)</b> to the Bank?")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+        self.ctrl.apply_move_multiple_to_bank(inv_key, indices)
+        self._clear_multi_selection()
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
+        self._refresh_pool_tab_title()
+        self._populate(self.ctrl.inv_items[current_tab])
+
+    def _move_selected_from_bank(self):
+        """Multi-select: move items back to Storage (from Bank or Trash)."""
+        if not self._multi_selection:
+            return
+        if not self._confirm_if_save_changed():
+            return
+        current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
+        indices     = sorted(self._multi_selection.keys())
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Move to Storage")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(f"Move <b>{len(indices)} item(s)</b> to Storage?")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+        if current_tab == "Bank":
+            self.ctrl.apply_move_multiple_from_bank(indices)
+        else:
+            # Trash → Storage
+            inv_key = TAB_TO_INV_KEY[current_tab]
+            self.ctrl.apply_move_multiple_to_storage(inv_key, indices)
+        self._clear_multi_selection()
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
+        self._populate(self.ctrl.inv_items[current_tab])
+
     def _sacrifice_item(self):
         if self._selected_item_idx is None or self._selected_inv_key is None:
             return
@@ -1432,21 +1527,24 @@ class MainWindow(QMainWindow):
         self._populate(self.ctrl.inv_items[origin_tab])
 
     def _move_bank_item(self):
-        """Handle the bank_btn: Storage → Bank or Bank → Storage."""
+        """Handle the bank_btn: Storage/Trash → Bank, or Bank → Storage."""
         if self._selected_item_idx is None or self._selected_inv_key is None:
             return
         if not self._confirm_if_save_changed():
             return
         origin_tab = self._selected_inv_key
-        if origin_tab == "Storage":
-            self.ctrl.apply_move_to_bank(self._selected_item_idx)
-        else:  # Bank tab
+        if origin_tab == "Bank":
             self.ctrl.apply_move_from_bank(self._selected_item_idx)
+        else:
+            # Storage or Trash → Bank
+            src_key = TAB_TO_INV_KEY[origin_tab]
+            self.ctrl.apply_move_multiple_to_bank(src_key, [self._selected_item_idx])
         self._selected_item_idx = None
         self._selected_btn = None
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
+        self._refresh_sacrifice_all_btn()
         self._refresh_pool_tab_title()
         self._populate(self.ctrl.inv_items[origin_tab])
 
