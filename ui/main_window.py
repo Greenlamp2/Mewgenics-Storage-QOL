@@ -314,6 +314,35 @@ def locked_overlay_pixmap(pixmap: QPixmap) -> QPixmap:
     return result
 
 
+def full_badge_pixmap(pixmap: QPixmap) -> QPixmap:
+    """Return a copy of *pixmap* with a 'FULL' banner across the bottom."""
+    from PySide6.QtGui import QColor, QFont, QPen
+    result = QPixmap(pixmap.size())
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.drawPixmap(0, 0, pixmap)
+
+    w = pixmap.width()
+    h = pixmap.height()
+    banner_h = max(10, h // 4)
+    y = h - banner_h
+
+    # Dark semi-transparent background strip
+    painter.fillRect(0, y, w, banner_h, QColor(10, 10, 10, 200))
+
+    # "FULL" text
+    font = QFont()
+    font.setPixelSize(max(7, banner_h - 4))
+    font.setBold(True)
+    painter.setFont(font)
+    painter.setPen(QPen(QColor(255, 220, 80)))
+    painter.drawText(0, y, w, banner_h, Qt.AlignmentFlag.AlignCenter, "FULL")
+
+    painter.end()
+    return result
+
+
 def svg_to_pixmap(svg_path: str, size: int) -> QPixmap:
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -1321,6 +1350,8 @@ class MainWindow(QMainWindow):
             pixmap = used_overlay_pixmap(pixmap)
         elif getattr(item, "locked", False):
             pixmap = locked_overlay_pixmap(pixmap)
+        if getattr(item, "name", None) == "SoulJar_Full":
+            pixmap = full_badge_pixmap(pixmap)
 
         tooltip = details.get("name_resolved") or item.name or "?"
         if getattr(item, "broken", False):
@@ -1560,6 +1591,8 @@ class MainWindow(QMainWindow):
             detail_px = used_overlay_pixmap(detail_px)
         elif getattr(item, "locked", False):
             detail_px = locked_overlay_pixmap(detail_px)
+        if getattr(item, "name", None) == "SoulJar_Full":
+            detail_px = full_badge_pixmap(detail_px)
         self.detail_icon.setPixmap(detail_px)
 
         # Name

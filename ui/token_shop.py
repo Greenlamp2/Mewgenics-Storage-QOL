@@ -54,6 +54,11 @@ LOOTBOX_CATEGORY_BLACKLIST: frozenset[str] = frozenset({
     "legendary",
 })
 
+# Specific item names never offered inside a lootbox (nor tracked in the pool)
+LOOTBOX_NAME_BLACKLIST: frozenset[str] = frozenset({
+    "SoulJar_Full",
+})
+
 # Numeric rank per rarity — used to detect upgrade rolls
 RARITY_ORDER: dict[str, int] = {
     "common":    0,
@@ -392,10 +397,11 @@ class LootboxDialog(QDialog):
         rarities = [r for r, w in dist.items() if w > 0]
         weights  = [dist[r] for r in rarities]
 
-        # Exclude blacklisted categories upfront
+        # Exclude blacklisted categories and blacklisted names upfront
         eligible = [
             i for i in self.pool_items
             if getattr(i, "category", None) not in LOOTBOX_CATEGORY_BLACKLIST
+            and (i.name or "") not in LOOTBOX_NAME_BLACKLIST
         ]
 
         # Pre-group eligible items by rarity for fast lookup

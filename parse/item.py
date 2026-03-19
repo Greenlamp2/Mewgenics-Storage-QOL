@@ -35,8 +35,8 @@ class Item:
             'syringe' in (self.name or '').lower() or 'syringe' in name_resolved
         ):
             self.icon_name = '../misc/sysinge.png'
-        # SoulJar: no SVG asset exists, use the dedicated PNG override
-        if (self.name or '') == 'SoulJar':
+        # SoulJar / SoulJar_Full: no SVG asset exists, use the dedicated PNG override
+        if (self.name or '') in ('SoulJar', 'SoulJar_Full'):
             self.icon_name = '../misc/soul_jar.png'
         self.rarity = self.details.get('rarity')
         try:
@@ -68,8 +68,8 @@ class GhostItem:
             'syringe' in (self.name or '').lower() or 'syringe' in name_resolved
         ):
             self.icon_name = '../misc/sysinge.png'
-        # SoulJar: no SVG asset exists, use the dedicated PNG override
-        if (self.name or '') == 'SoulJar':
+        # SoulJar / SoulJar_Full: no SVG asset exists, use the dedicated PNG override
+        if (self.name or '') in ('SoulJar', 'SoulJar_Full'):
             self.icon_name = '../misc/soul_jar.png'
 
         rarity = self.details.get("rarity", "common") or "common"

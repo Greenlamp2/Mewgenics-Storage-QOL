@@ -16,6 +16,11 @@ from utils.savers import save_inventories as _save_inventories, save_tokens, \
 # Rarities that should never appear in any view
 EXCLUDED_RARITIES = {"sidequest", "quest"}
 
+# Item names that should never be tracked in the pool nor offered in lootboxes
+POOL_NAME_BLACKLIST: frozenset = frozenset({
+    "SoulJar_Full",
+})
+
 
 class AppController:
     """Owns app state; exposes query and command methods for the UI to call."""
@@ -62,7 +67,7 @@ class AppController:
         for inv_key in ("storage", "trash"):
             for raw_item in self.inventories[inv_key].raws:
                 name = raw_item.get("name")
-                if name and name not in self.items_pool:
+                if name and name not in self.items_pool and name not in POOL_NAME_BLACKLIST:
                     self.items_pool[name] = raw_item
                     changed = True
         if changed:
@@ -298,7 +303,7 @@ class AppController:
 
         # ── Pool auto-discovery (same rule as load_data) ──────────────
         name = new_raw.get("name")
-        if name and name not in self.items_pool:
+        if name and name not in self.items_pool and name not in POOL_NAME_BLACKLIST:
             self.items_pool[name] = new_raw
             save_items_pool(self.items_pool)
             self.pool_items = [Item(r) for r in self.items_pool.values()]
@@ -329,7 +334,7 @@ class AppController:
             bank.items.append(Item(new_raw))
             bank.count += 1
             name = new_raw.get("name")
-            if name and name not in self.items_pool:
+            if name and name not in self.items_pool and name not in POOL_NAME_BLACKLIST:
                 self.items_pool[name] = new_raw
         self.save_inventories()
         save_items_pool(self.items_pool)
@@ -677,7 +682,7 @@ class AppController:
 
             # Add to pool if not already discovered (same rule as load_data)
             name = new_raw.get("name")
-            if name and name not in self.items_pool:
+            if name and name not in self.items_pool and name not in POOL_NAME_BLACKLIST:
                 self.items_pool[name] = new_raw
                 pool_changed = True
 
