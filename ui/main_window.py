@@ -1209,11 +1209,50 @@ class MainWindow(QMainWindow):
             _place(self._make_folder_cell(fb, name))
 
         # Item buttons — sorted, always after folders
-        for orig_idx, item in self._sorted_indexed(list(items_here)):
-            btn = self._make_item_btn(orig_idx, item, all_items)
-            flt = _ItemDragFilter(btn, item.seqId, parent=btn)
-            self._bank_drag_filters.append(flt)
-            _place(btn)
+        sorted_items = self._sorted_indexed(list(items_here))
+
+        if self._sort_key == "category" and sorted_items:
+            # Grouped rendering with category headers (must manage row/col manually)
+            groups: dict[str, list] = {}
+            for orig_idx, item in sorted_items:
+                cat = item.category or "Unknown"
+                groups.setdefault(cat, []).append((orig_idx, item))
+
+            # Flush current col to a new row before the first header
+            if col != 0:
+                row += 1
+                col = 0
+
+            for cat, group in groups.items():
+                header = QLabel(f"  {cat.capitalize()}")
+                header.setFixedHeight(24)
+                header.setStyleSheet(
+                    "QLabel { font-size: 11px; font-weight: bold; color: #aaaaaa;"
+                    " background: rgba(255,255,255,0.05);"
+                    " border-bottom: 1px solid #444; padding-left: 4px; }"
+                )
+                self.grid.addWidget(header, row, 0, 1, GRID_COLS)
+                row += 1
+                col = 0
+
+                for orig_idx, item in group:
+                    btn = self._make_item_btn(orig_idx, item, all_items)
+                    flt = _ItemDragFilter(btn, item.seqId, parent=btn)
+                    self._bank_drag_filters.append(flt)
+                    self.grid.addWidget(btn, row, col)
+                    col += 1
+                    if col >= GRID_COLS:
+                        col = 0
+                        row += 1
+                if col != 0:
+                    row += 1
+                    col = 0
+        else:
+            for orig_idx, item in sorted_items:
+                btn = self._make_item_btn(orig_idx, item, all_items)
+                flt = _ItemDragFilter(btn, item.seqId, parent=btn)
+                self._bank_drag_filters.append(flt)
+                _place(btn)
 
     def _bank_handle_drop(self, data: dict, target_folder_id):
         """Called when an item is dropped onto a folder or '..' button."""
@@ -1845,7 +1884,10 @@ class MainWindow(QMainWindow):
         self._clear_detail()
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
-        self._populate(self.ctrl.inv_items[current_tab])
+        if current_tab == "Bank":
+            self._populate_bank()
+        else:
+            self._populate(self.ctrl.inv_items[current_tab])
 
     def _move_bank_item_to_trash(self):
         """Single-item: move the selected Bank item to Trash."""
@@ -1937,7 +1979,10 @@ class MainWindow(QMainWindow):
         self._hide_all_action_btns()
         self._refresh_sacrifice_all_btn()
         self._refresh_pool_tab_title()
-        self._populate(self.ctrl.inv_items[origin_tab])
+        if origin_tab == "Bank":
+            self._populate_bank()
+        else:
+            self._populate(self.ctrl.inv_items[origin_tab])
 
     def _sacrifice_all_trash(self):
         if not self._confirm_if_save_changed():
@@ -2083,7 +2128,7 @@ class MainWindow(QMainWindow):
             self._clear_grid()
             self._clear_detail()
             self._hide_all_action_btns()
-            self._populate(self.ctrl.inv_items["Bank"])
+            self._populate_bank()
         self.ctrl.inv_items["Bank"] = self.ctrl.inventories["bank"].items
         # Refresh pool tab title in case new items were discovered via the gift
         self._refresh_pool_tab_title()
