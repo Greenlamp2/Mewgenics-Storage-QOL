@@ -137,15 +137,19 @@ def _ability_list(
 
 class _CatCard(QFrame):
     """Compact clickable cat card shown in the list."""
-    selected = Signal(object)
+    selected   = Signal(object)        # regular left-click → show detail
+    ms_toggled = Signal(object, bool)  # Ctrl+click → (cat, is_now_selected)
 
     _NORMAL = "QFrame { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; }"
     _HOVER  = "QFrame { background: #242424; border: 1px solid #555; border-radius: 6px; }"
     _ACTIVE = "QFrame { background: #1a2a1a; border: 1px solid #4caf50; border-radius: 6px; }"
+    _MS_SEL = "QFrame { background: #1a1a2e; border: 2px solid #7777ee; border-radius: 6px; }"
 
     def __init__(self, cat, parent=None):
         super().__init__(parent)
-        self._cat = cat
+        self._cat         = cat
+        self._active      = False
+        self._ms_selected = False
         self.setFixedHeight(58)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(self._NORMAL)
@@ -185,22 +189,39 @@ class _CatCard(QFrame):
         """Refresh the displayed name from the underlying cat object."""
         self._name_lbl.setText(self._cat.name or "(unknown)")
 
+    def _update_style(self):
+        if self._ms_selected:
+            self.setStyleSheet(self._MS_SEL)
+        elif self._active:
+            self.setStyleSheet(self._ACTIVE)
+        else:
+            self.setStyleSheet(self._NORMAL)
+
     def set_active(self, active: bool):
-        self.setStyleSheet(self._ACTIVE if active else self._NORMAL)
+        self._active = active
+        self._update_style()
+
+    def set_ms_selected(self, selected: bool):
+        self._ms_selected = selected
+        self._update_style()
 
     def enterEvent(self, event):
-        if self.styleSheet() != self._ACTIVE:
+        if not self._ms_selected and not self._active:
             self.setStyleSheet(self._HOVER)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        if self.styleSheet() != self._ACTIVE:
+        if not self._ms_selected and not self._active:
             self.setStyleSheet(self._NORMAL)
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.selected.emit(self._cat)
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                new_state = not self._ms_selected
+                self.ms_toggled.emit(self._cat, new_state)
+            else:
+                self.selected.emit(self._cat)
         super().mousePressEvent(event)
 
 
@@ -645,6 +666,7 @@ class CatManagerWindow(QWidget):
         self._cats = cats
         self._ctrl = ctrl
         self._active_card: _CatCard | None = None
+        self._ms_selected: set = set()   # set of Cat objects currently multi-selected
 
         # ── Filter bar ───────────────────────────────────────────────
         filter_bar = QWidget()
@@ -712,11 +734,62 @@ class CatManagerWindow(QWidget):
         self._detail.banked.connect(self._on_cat_banked)
         self._detail.sent.connect(self._on_cat_sent)
 
+        # ── Multi-select action bar (hidden until cats are selected) ─
+        self._ms_bar = QWidget()
+        self._ms_bar.setStyleSheet(
+            "QWidget { background: #16162a; border-top: 1px solid #5555aa; }"
+        )
+        ms_lay = QHBoxLayout(self._ms_bar)
+        ms_lay.setContentsMargins(8, 5, 8, 5)
+        ms_lay.setSpacing(6)
+
+        self._ms_count_lbl = QLabel("")
+        self._ms_count_lbl.setStyleSheet(
+            "color: #9999ff; font-size: 11px; font-weight: bold; background: transparent;"
+        )
+        ms_lay.addWidget(self._ms_count_lbl)
+        ms_lay.addStretch()
+
+        def _ms_btn(label, border, bg, fg):
+            b = QPushButton(label)
+            b.setStyleSheet(
+                f"QPushButton {{ font-size: 11px; padding: 3px 10px; border: 1px solid {border};"
+                f" border-radius: 4px; background: {bg}; color: {fg}; }}"
+                f"QPushButton:hover {{ background: {bg}44; color: #fff; }}"
+            )
+            return b
+
+        self._ms_bank_btn   = _ms_btn("🏦 Bank",    "#5555aa", "#1a1a3a", "#aaaaff")
+        self._ms_unbank_btn = _ms_btn("🏠 Unbank",  "#4caf50", "#1a2a1a", "#66cc66")
+        self._ms_gift_btn   = _ms_btn("🎁 Gift",    "#aa5555", "#2a1a1a", "#ff9999")
+
+        self._ms_bank_btn.clicked.connect(self._ms_do_bank)
+        self._ms_unbank_btn.clicked.connect(self._ms_do_unbank)
+        self._ms_gift_btn.clicked.connect(self._ms_do_send_gift)
+
+        ms_lay.addWidget(self._ms_bank_btn)
+        ms_lay.addWidget(self._ms_unbank_btn)
+        ms_lay.addWidget(self._ms_gift_btn)
+
+        clear_ms_btn = QPushButton("✕")
+        clear_ms_btn.setFixedSize(22, 22)
+        clear_ms_btn.setToolTip("Clear selection")
+        clear_ms_btn.setStyleSheet(
+            "QPushButton { background: #333; border: 1px solid #666; border-radius: 4px;"
+            " color: #aaa; font-size: 11px; padding: 0; }"
+            "QPushButton:hover { background: #555; color: #fff; }"
+        )
+        clear_ms_btn.clicked.connect(self._clear_ms_selection)
+        ms_lay.addWidget(clear_ms_btn)
+
+        self._ms_bar.hide()
+
         left_frame = QWidget()
         lf_lay = QVBoxLayout(left_frame)
         lf_lay.setContentsMargins(0, 0, 0, 0)
         lf_lay.setSpacing(0)
-        lf_lay.addWidget(list_scroll)
+        lf_lay.addWidget(list_scroll, 1)
+        lf_lay.addWidget(self._ms_bar)
 
         splitter.addWidget(left_frame)
         splitter.addWidget(self._detail)
@@ -740,6 +813,7 @@ class CatManagerWindow(QWidget):
                 self._filter_btn_active_style if k == key
                 else self._filter_btn_normal_style
             )
+        self._clear_ms_selection()
         self._rebuild_list()
 
     def _filtered_cats(self) -> list:
@@ -760,6 +834,7 @@ class CatManagerWindow(QWidget):
                 item.widget().deleteLater()
 
         self._active_card = None
+        # Keep ms_selected set intact across rebuilds — only clear it explicitly
 
         cats = self._filtered_cats()
         self._count_lbl.setText(f"{len(cats)} cat(s)")
@@ -774,11 +849,19 @@ class CatManagerWindow(QWidget):
         for cat in sorted(cats, key=lambda c: (c.name or "").lower()):
             card = _CatCard(cat)
             card.selected.connect(self._on_cat_selected)
+            card.ms_toggled.connect(self._on_card_ms_toggled)
+            # Restore ms-selected visual state if this cat is still in the set
+            if cat in self._ms_selected:
+                card.set_ms_selected(True)
             self._list_layout.addWidget(card)
 
         self._list_layout.addStretch()
+        self._refresh_ms_bar()
 
     def _on_cat_selected(self, cat):
+        # Clear ms selection on a normal (non-Ctrl) click
+        self._clear_ms_selection()
+
         if self._active_card is not None:
             self._active_card.set_active(False)
 
@@ -792,6 +875,140 @@ class CatManagerWindow(QWidget):
                     break
 
         self._detail.show_cat(cat)
+
+    # ── Multi-select ─────────────────────────────────────────────────
+
+    def _on_card_ms_toggled(self, cat, is_selected: bool):
+        """Called when a card is Ctrl+clicked."""
+        if is_selected:
+            self._ms_selected.add(cat)
+        else:
+            self._ms_selected.discard(cat)
+
+        # Update the card visual
+        for i in range(self._list_layout.count()):
+            item = self._list_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), _CatCard):
+                card = item.widget()
+                if card._cat is cat:
+                    card.set_ms_selected(is_selected)
+                    break
+
+        self._refresh_ms_bar()
+
+    def _clear_ms_selection(self):
+        """Deselect all multi-selected cats and hide the action bar."""
+        self._ms_selected.clear()
+        for i in range(self._list_layout.count()):
+            item = self._list_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), _CatCard):
+                item.widget().set_ms_selected(False)
+        self._ms_bar.hide()
+
+    def _refresh_ms_bar(self):
+        """Show / hide the action bar and update button visibility based on current filter."""
+        n = len(self._ms_selected)
+        if n == 0:
+            self._ms_bar.hide()
+            return
+
+        self._ms_count_lbl.setText(f"{n} cat{'s' if n > 1 else ''} selected  —  Ctrl+click to add/remove")
+
+        # Show buttons relevant to the current filter
+        is_house = self._filter == "house"
+        is_bank  = self._filter == "bank"
+        self._ms_bank_btn.setVisible(is_house)
+        self._ms_unbank_btn.setVisible(is_bank)
+        self._ms_gift_btn.setVisible(is_house or is_bank)
+
+        self._ms_bar.show()
+
+    def _ms_do_bank(self):
+        """Bank all currently ms-selected In-House cats."""
+        cats = list(self._ms_selected)
+        if not cats:
+            return
+        names = ", ".join(c.name for c in cats)
+        reply = QMessageBox.question(
+            self, "Bank Selected Cats",
+            f"Send <b>{len(cats)}</b> cat(s) to the cat bank?<br><br>{names}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            count = self._ctrl.apply_bank_cats_multiple(cats)
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+            return
+        self._ms_selected.clear()
+        self._rebuild_list()
+        self._detail.clear()
+        QMessageBox.information(self, "Done", f"{count} cat(s) sent to the cat bank.")
+
+    def _ms_do_unbank(self):
+        """Unbank all currently ms-selected In-Bank cats."""
+        cats = list(self._ms_selected)
+        if not cats:
+            return
+        names = ", ".join(c.name for c in cats)
+        reply = QMessageBox.question(
+            self, "Move to House",
+            f"Move <b>{len(cats)}</b> cat(s) back to the house?<br><br>{names}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            count = self._ctrl.apply_unbank_cats_multiple(cats)
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+            return
+        self._ms_selected.clear()
+        self._rebuild_list()
+        self._detail.clear()
+        QMessageBox.information(self, "Done", f"{count} cat(s) moved back to the house.")
+
+    def _ms_do_send_gift(self):
+        """Send all ms-selected cats as gifts to the partner."""
+        cats = list(self._ms_selected)
+        if not cats:
+            return
+        if self._ctrl is None:
+            return
+        try:
+            ctx = self._ctrl.get_gift_context()
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+            return
+        if not ctx.get("is_known_user"):
+            QMessageBox.warning(
+                self, "Cannot Send Gift",
+                "Your save file's Steam ID was not recognised.\n"
+                "Gift features require a known user pair configured in version.py."
+            )
+            return
+        names = ", ".join(c.name for c in cats)
+        reply = QMessageBox.question(
+            self, "🎁 Send Cats",
+            f"Send <b>{len(cats)}</b> cat(s) to <b>{ctx['recipient_name']}</b>?<br><br>"
+            f"{names}<br><br>The cats will be removed from your save.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            count = self._ctrl.apply_send_cats_multiple(cats)
+        except Exception as exc:
+            QMessageBox.critical(self, "Send Failed", str(exc))
+            return
+        self._ms_selected.clear()
+        self._rebuild_list()
+        self._detail.clear()
+        QMessageBox.information(
+            self, "Cats Sent",
+            f"<b>{count}</b> cat(s) sent to {ctx['recipient_name']}!"
+        )
 
     def _on_cat_renamed(self, cat):
         """Called after a successful rename: update the card label in-place."""
@@ -809,11 +1026,13 @@ class CatManagerWindow(QWidget):
 
     def _on_cat_banked(self, cat):
         """Called after a bank / unbank action: rebuild the list and reselect the cat."""
+        self._ms_selected.discard(cat)
         self._rebuild_list()
         self._reselect_cat(cat)
 
     def _on_cat_sent(self, cat):
         """Called after a cat gift is sent: rebuild the list (cat is now Gone)."""
+        self._ms_selected.discard(cat)
         self._rebuild_list()
         self._detail.clear()
 
@@ -861,4 +1080,5 @@ class CatManagerWindow(QWidget):
     def refresh(self, cats: list):
         """Update the cat list (called when the main window reloads)."""
         self._cats = cats
+        self._ms_selected.clear()
         self._rebuild_list()

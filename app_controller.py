@@ -346,6 +346,75 @@ class AppController:
         cat.room   = ""
         self._refresh_mtime()
 
+    def apply_bank_cats_multiple(self, cats: list) -> int:
+        """Bank multiple "In House" cats in a single write. Returns count banked."""
+        banked = 0
+        for cat in cats:
+            if cat.status != "In House":
+                continue
+            entry_bytes = self._house_state_entries.get(cat.db_key)
+            if entry_bytes is None:
+                continue
+            self.cat_bank[cat.db_key] = {
+                'entry_bytes': entry_bytes,
+                'room_name':   cat.room,
+            }
+            self._house_state_entries.pop(cat.db_key, None)
+            cat.status = "In Bank"
+            banked += 1
+        if banked:
+            save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+            save_cat_bank(self.sav_path, self.cat_bank)
+            self._refresh_mtime()
+        return banked
+
+    def apply_unbank_cats_multiple(self, cats: list) -> int:
+        """Unbank multiple "In Bank" cats in a single write. Returns count unbanked."""
+        unbanked = 0
+        for cat in cats:
+            if cat.status != "In Bank" or cat.db_key not in self.cat_bank:
+                continue
+            bank_entry = self.cat_bank[cat.db_key]
+            self._house_state_entries[cat.db_key] = bank_entry['entry_bytes']
+            cat.status = "In House"
+            cat.room   = bank_entry['room_name']
+            del self.cat_bank[cat.db_key]
+            unbanked += 1
+        if unbanked:
+            save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+            save_cat_bank(self.sav_path, self.cat_bank)
+            self._refresh_mtime()
+        return unbanked
+
+    def apply_send_cats_multiple(self, cats: list) -> int:
+        """Send multiple cats as gifts in one batch. Returns count sent."""
+        from utils.gift_manager import send_cat as _send_cat, get_steam_id_from_path, get_recipient_id
+        sendable = [c for c in cats if c.status in ("In House", "In Bank")]
+        if not sendable:
+            return 0
+        ctx_id    = get_steam_id_from_path(self.sav_path)
+        recipient = get_recipient_id(ctx_id) if ctx_id is not None else None
+        if recipient is None:
+            raise ValueError("Cannot determine gift recipient — save file user ID not recognized.")
+        hs_changed   = False
+        bank_changed = False
+        for cat in sendable:
+            _send_cat(cat.to_blob(), recipient)
+            if cat.status == "In House":
+                self._house_state_entries.pop(cat.db_key, None)
+                hs_changed = True
+            elif cat.status == "In Bank":
+                self.cat_bank.pop(cat.db_key, None)
+                bank_changed = True
+            cat.status = "Gone"
+            cat.room   = ""
+        if hs_changed:
+            save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+        if bank_changed:
+            save_cat_bank(self.sav_path, self.cat_bank)
+        self._refresh_mtime()
+        return len(sendable)
+
     def apply_receive_cats(self) -> list:
         """Fetch all pending cat blobs from ``cat_trade``, insert them into the
         local ``cats`` table, and place them in the cat bank so the user can
