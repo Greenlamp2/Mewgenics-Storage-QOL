@@ -200,6 +200,30 @@ class _CatDetail(QScrollArea):
         )
         h_lay.addWidget(name_lbl)
 
+        # Special flags row (is_blacklisted, must_breed)
+        flags_row = QHBoxLayout()
+        flags_row.setContentsMargins(0, 0, 0, 0)
+        flags_row.setSpacing(6)
+        flags_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if getattr(cat, "is_blacklisted", False):
+            bl = QLabel("🚫 Blacklisted")
+            bl.setStyleSheet(
+                "background: #3a0a0a; color: #ff6060; font-size: 11px; font-weight: bold;"
+                " border: 1px solid #882222; border-radius: 4px; padding: 2px 8px;"
+            )
+            flags_row.addWidget(bl)
+        if getattr(cat, "must_breed", False):
+            mb = QLabel("💕 Must Breed")
+            mb.setStyleSheet(
+                "background: #2a1a2a; color: #ff99cc; font-size: 11px; font-weight: bold;"
+                " border: 1px solid #884466; border-radius: 4px; padding: 2px 8px;"
+            )
+            flags_row.addWidget(mb)
+        if flags_row.count():
+            flags_widget = QWidget()
+            flags_widget.setLayout(flags_row)
+            h_lay.addWidget(flags_widget)
+
         status = cat.status
         s_color = _STATUS_COLOR.get(status, "#888")
         status_lbl = QLabel(f"{_STATUS_ICON.get(status, '')}  {status}")
@@ -221,15 +245,19 @@ class _CatDetail(QScrollArea):
         self._layout.addWidget(_section_label("🐱  Identity"))
 
         g = cat.gender
-        self._layout.addWidget(_info_row("Gender",
-            f"{_GENDER_SYMBOL.get(g, '?')} {g.capitalize()}",
-            _GENDER_COLOR.get(g, "#aaa")))
-        self._layout.addWidget(_info_row("Breed ID",     str(cat.breed_id)))
-        self._layout.addWidget(_info_row("Generation",   f"G{cat.generation}"))
-        self._layout.addWidget(_info_row("Room",         cat.room or "—"))
+        gender_src = getattr(cat, "gender_source", "")
+        gender_src_note = f" ({gender_src})" if gender_src else ""
+        self._layout.addWidget(_info_row(
+            "Gender",
+            f"{_GENDER_SYMBOL.get(g, '?')} {g.capitalize()}{gender_src_note}",
+            _GENDER_COLOR.get(g, "#aaa"),
+        ))
+        self._layout.addWidget(_info_row("Breed ID",   str(cat.breed_id)))
+        self._layout.addWidget(_info_row("Generation", f"G{cat.generation}"))
+        self._layout.addWidget(_info_row("Room",       cat.room or "—"))
         if cat.age is not None:
-            self._layout.addWidget(_info_row("Age",      f"{cat.age} day(s)"))
-        self._layout.addWidget(_info_row("Unique ID",    cat.unique_id, "#666"))
+            self._layout.addWidget(_info_row("Age",    f"{cat.age} day(s)"))
+        self._layout.addWidget(_info_row("Unique ID",  cat.unique_id, "#666"))
 
         self._layout.addWidget(_hsep())
 
@@ -240,42 +268,58 @@ class _CatDetail(QScrollArea):
 
         # ── Personality ───────────────────────────────────────────────
         self._layout.addWidget(_section_label("🧠  Personality"))
-        self._layout.addWidget(_info_row("Aggression",   _fmt_pct(cat.aggression),  "#e05050"))
-        self._layout.addWidget(_info_row("Libido",       _fmt_pct(cat.libido),      "#e090c0"))
-        self._layout.addWidget(_info_row("Inbredness",   _fmt_pct(cat.inbredness),  "#c0a030"))
-        self._layout.addWidget(_info_row("Sexuality",    (cat.sexuality or "—").capitalize()))
+        self._layout.addWidget(_info_row("Aggression", _fmt_pct(cat.aggression), "#e05050"))
+        self._layout.addWidget(_info_row("Libido",     _fmt_pct(cat.libido),     "#e090c0"))
+        self._layout.addWidget(_info_row("Inbredness", _fmt_pct(cat.inbredness), "#c0a030"))
+        self._layout.addWidget(_info_row("Sexuality",  (cat.sexuality or "—").capitalize()))
         self._layout.addWidget(_hsep())
 
         # ── Abilities ─────────────────────────────────────────────────
         self._layout.addWidget(_section_label("⚔️  Abilities"))
-        self._layout.addWidget(_chip_row(cat.abilities,         "#1e3a5a", "#5b9cf6"))
+        self._layout.addWidget(_chip_row(cat.abilities, "#1e3a5a", "#5b9cf6"))
+
         if cat.passive_abilities:
             self._layout.addWidget(_section_label("●  Passives"))
             self._layout.addWidget(_chip_row(cat.passive_abilities, "#1a3a1a", "#66cc66"))
+
         if cat.disorders:
             self._layout.addWidget(_section_label("⚠  Disorders"))
-            self._layout.addWidget(_chip_row(cat.disorders,        "#3a1a1a", "#e05050"))
+            self._layout.addWidget(_chip_row(cat.disorders, "#3a1a1a", "#e05050"))
+
+        # Equipment (if any — only cats that use the fallback ability parser have this)
+        equipment = getattr(cat, "equipment", [])
+        if equipment:
+            self._layout.addWidget(_section_label("🎒  Equipment"))
+            self._layout.addWidget(_chip_row(equipment, "#1a1a2a", "#b0a0e0"))
+
         self._layout.addWidget(_hsep())
 
-        # ── Mutations / Defects ───────────────────────────────────────
-        if cat.mutations or cat.defects:
+        # ── Mutations / Defects — use chip_items for tooltips ─────────
+        mutation_chip_items = getattr(cat, "mutation_chip_items", [])
+        defect_chip_items   = getattr(cat, "defect_chip_items",   [])
+
+        if mutation_chip_items or defect_chip_items:
             self._layout.addWidget(_section_label("🧬  Mutations"))
-            if cat.mutations:
-                self._layout.addWidget(_chip_row(cat.mutations,    "#1a2a3a", "#80bbdd"))
-            if cat.defects:
+            if mutation_chip_items:
+                self._layout.addWidget(
+                    _chip_row_tips(mutation_chip_items, "#1a2a3a", "#80bbdd")
+                )
+            if defect_chip_items:
                 self._layout.addWidget(_section_label("⚡  Defects"))
-                self._layout.addWidget(_chip_row(cat.defects,      "#3a2a1a", "#e0a030"))
+                self._layout.addWidget(
+                    _chip_row_tips(defect_chip_items, "#3a2a1a", "#e0a030")
+                )
             self._layout.addWidget(_hsep())
 
         # ── Family ────────────────────────────────────────────────────
         self._layout.addWidget(_section_label("👨‍👩‍👧  Family"))
         pa = cat.parent_a.name if cat.parent_a else "—"
         pb = cat.parent_b.name if cat.parent_b else "—"
-        self._layout.addWidget(_info_row("Parent A",  pa, "#b0c8f0"))
-        self._layout.addWidget(_info_row("Parent B",  pb, "#b0c8f0"))
-        self._layout.addWidget(_info_row("Children",  _names(cat.children), "#c8f0b0"))
-        self._layout.addWidget(_info_row("Lovers",    _names(cat.lovers),   "#f0b0c8"))
-        self._layout.addWidget(_info_row("Haters",    _names(cat.haters),   "#f0b0b0"))
+        self._layout.addWidget(_info_row("Parent A",  pa,                    "#b0c8f0"))
+        self._layout.addWidget(_info_row("Parent B",  pb,                    "#b0c8f0"))
+        self._layout.addWidget(_info_row("Children",  _names(cat.children),  "#c8f0b0"))
+        self._layout.addWidget(_info_row("Lovers",    _names(cat.lovers),    "#f0b0c8"))
+        self._layout.addWidget(_info_row("Haters",    _names(cat.haters),    "#f0b0b0"))
 
         self._layout.addStretch()
 
@@ -342,7 +386,12 @@ def _hsep() -> QFrame:
 
 
 def _chip_row(items: list[str], bg: str, fg: str) -> QWidget:
-    """A wrapping row of small coloured chips."""
+    """A wrapping row of small coloured chips (no tooltips)."""
+    return _chip_row_tips([(t, "") for t in items], bg, fg)
+
+
+def _chip_row_tips(items: list[tuple[str, str]], bg: str, fg: str) -> QWidget:
+    """A wrapping row of coloured chips, each with an optional tooltip."""
     w = QWidget()
     w.setStyleSheet("background: transparent;")
     lay = QHBoxLayout(w)
@@ -355,12 +404,14 @@ def _chip_row(items: list[str], bg: str, fg: str) -> QWidget:
         none_lbl.setStyleSheet("color: #666; font-size: 12px; background: transparent;")
         lay.addWidget(none_lbl)
     else:
-        for name in items:
+        for name, tip in items:
             chip = QLabel(name)
             chip.setStyleSheet(
                 f"background: {bg}; color: {fg}; font-size: 11px;"
                 f" border: 1px solid {fg}44; border-radius: 4px; padding: 2px 6px;"
             )
+            if tip:
+                chip.setToolTip(tip)
             lay.addWidget(chip)
     lay.addStretch()
     return w
@@ -538,5 +589,4 @@ class CatManagerWindow(QWidget):
         """Update the cat list (called when the main window reloads)."""
         self._cats = cats
         self._rebuild_list()
-
 

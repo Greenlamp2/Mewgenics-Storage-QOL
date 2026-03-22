@@ -105,8 +105,6 @@ class Cat:
             for slot_key, table_index, *_ in _VISUAL_MUTATION_FIELDS
             if table_index < len(T)
         }
-        if self.name == 'Saimon':
-            print('')
         visual_entries = _read_visual_mutation_entries(T)
         visual_items = _visual_mutation_chip_items(visual_entries)
         self.visual_mutation_entries = visual_entries
