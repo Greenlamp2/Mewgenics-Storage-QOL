@@ -5,11 +5,14 @@ No PySide6 imports here; this module is UI-agnostic.
 """
 import datetime
 import os
+from typing import Optional
 
+from parse.cat import Cat
 from parse.item import Item, GhostItem
 from catalogs.itemcatalog import item_catalog
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, \
-    load_save_properties, load_cats_count, load_bank_inventory, load_bank_folders, SAVE_INFO_KEYS
+    load_save_properties, load_cats_count, load_bank_inventory, load_bank_folders, SAVE_INFO_KEYS, load_house_infos, \
+    load_adventure_keys, load_cats, load_pedigree, load_current_day
 from utils.savers import save_inventories as _save_inventories, save_tokens, \
     save_bank_inventory, save_items_pool, save_bank_folders
 
@@ -39,6 +42,7 @@ class AppController:
         self.inv_items: dict = {}
         self.save_properties: dict[str, str] = {}
         self.bank_folders: dict = {"folders": [], "item_folders": {}}
+        self.cats: list = []
 
     # ------------------------------------------------------------------
     # Data loading
@@ -92,6 +96,91 @@ class AppController:
             "Bank":    self.inventories["bank"].items,
             "Pool":    self.pool_items + self.undiscovered_pool_items,
         }
+        house = load_house_infos(self.sav_path)
+        adv = load_adventure_keys(self.sav_path)
+        raw_cats = load_cats(self.sav_path)
+        ped_map = load_pedigree(self.sav_path)
+        current_day = load_current_day(self.sav_path)
+
+        cats, errors = [], []
+        for key, blob in raw_cats:
+            try:
+                cats.append(Cat(blob, key, house, adv, current_day))
+            except Exception as e:
+                errors.append((key, str(e)))
+
+        key_to_cat: dict = {c.db_key: c for c in cats}
+
+        for cat in cats:
+            # Pedigree db_key lookup — only assigns a parent if that cat is still
+            # present in the save.  If the real parents are gone (dead/sold), we
+            # leave parent_a/parent_b as None rather than falling back to an
+            # unreliable blob-UID scan that picks up wrong living cats.
+            pa: Optional[Cat] = None
+            pb: Optional[Cat] = None
+            if cat.db_key in ped_map:
+                pa_k, pb_k = ped_map[cat.db_key]
+                pa = key_to_cat.get(pa_k)
+                pb = key_to_cat.get(pb_k)
+                # Sanity: a cat cannot be its own parent
+                if pa is cat: pa = None
+                if pb is cat: pb = None
+            cat.parent_a = pa
+            cat.parent_b = pb
+
+            cat.lovers = []
+            for key in getattr(cat, "_lover_uids", []):
+                other = key_to_cat.get(key)
+                if other is not None and other is not cat and other not in cat.lovers:
+                    cat.lovers.append(other)
+
+            cat.haters = []
+            for key in getattr(cat, "_hater_uids", []):
+                other = key_to_cat.get(key)
+                if other is not None and other is not cat and other not in cat.haters:
+                    cat.haters.append(other)
+
+        # Build children bottom-up from the now-resolved parent fields.
+        # This avoids the circular-reference problem in the pedigree blob.
+        for cat in cats:
+            cat.children = []
+        for cat in cats:
+            for parent in (cat.parent_a, cat.parent_b):
+                if parent is not None and cat not in parent.children:
+                    parent.children.append(cat)
+
+        # Compute generation depth safely (iterative; handles cycles)
+        # Strays: generation 0
+        for c in cats:
+            c.generation = 0 if (c.parent_a is None and c.parent_b is None) else -1
+
+        # Relaxation: propagate parent generations downward until stable
+        for _ in range(len(cats) + 1):
+            changed = False
+            for c in cats:
+                pa_g = c.parent_a.generation if c.parent_a is not None else -1
+                pb_g = c.parent_b.generation if c.parent_b is not None else -1
+
+                # If at least one parent has a known generation, we can set this cat's generation.
+                if pa_g >= 0 or pb_g >= 0:
+                    g = max(pa_g, pb_g) + 1
+                    if c.generation != g:
+                        c.generation = g
+                        changed = True
+
+            if not changed:
+                break
+
+        # Any remaining -1 are part of cycles or disconnected-from-stray components; default them to 0.
+        for c in cats:
+            if c.generation < 0:
+                c.generation = 0
+
+        self.cats = cats
+
+
+
+
 
     # ------------------------------------------------------------------
     # Persistence helpers

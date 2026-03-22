@@ -1,0 +1,1 @@
+STAT_NAMES = ["STR", "DEX", "CON", "INT", "SPD", "CHA", "LCK"]

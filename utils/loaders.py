@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import struct
 
 from parse.inventory import Inventory
 from utils.save_manager import TOKENS_BANK_PATH, ITEMS_POOL_PATH  # TOKENS_BANK_PATH kept for migration only
@@ -44,8 +45,9 @@ def load_cats_count(path: str) -> int:
         return 0
 
 
-def _fetch_blob(conn, key):
-    row = conn.execute("SELECT data FROM files WHERE key=?", (key,)).fetchone()
+def _fetch_blob(conn, key, table="files"):
+    query = f"SELECT data FROM {table} WHERE key=?"
+    row = conn.execute(query, (key,)).fetchone()
     return row[0] if row else None
 
 def load_inventories(path):
@@ -60,6 +62,104 @@ def load_inventories(path):
         'storage': storage,
         'trash': trash,
     }
+
+def load_house_infos(path):
+    conn = sqlite3.connect(path)
+    data = _fetch_blob(conn, 'house_state')
+    if not data:
+        return {}
+    count = struct.unpack_from('<I', data, 4)[0]
+    pos   = 8
+    result = {}
+    for _ in range(count):
+        if pos + 8 > len(data):
+            break
+        cat_key  = struct.unpack_from('<I', data, pos)[0]
+        pos += 8
+        room_len = struct.unpack_from('<I', data, pos)[0]
+        pos += 8
+        room_name = ""
+        if room_len > 0:
+            room_name = data[pos:pos + room_len].decode('ascii', errors='ignore')
+            pos += room_len
+        pos += 24
+        result[cat_key] = room_name
+    return result
+
+def load_adventure_keys(path):
+    conn = sqlite3.connect(path)
+    keys = set()
+    try:
+        data = _fetch_blob(conn, 'adventure_state')
+        if not data:
+            return keys
+        count = struct.unpack_from('<I', data, 4)[0]
+        pos   = 8
+        for _ in range(count):
+            if pos + 8 > len(data):
+                break
+            val = struct.unpack_from('<Q', data, pos)[0]
+            pos += 8
+            cat_key = (val >> 32) & 0xFFFF_FFFF
+            if cat_key:
+                keys.add(cat_key)
+    except Exception:
+        pass
+    return keys
+
+def load_cats(path):
+    conn = sqlite3.connect(path)
+    rows  = conn.execute("SELECT key, data FROM cats").fetchall()
+    return rows
+
+def load_pedigree(path):
+    """
+    Parse the pedigree blob from the files table.
+    Each 32-byte entry: u64 cat_key, u64 parent_a_key, u64 parent_b_key, u64 extra.
+    0xFFFFFFFFFFFFFFFF means null/unknown for parent fields.
+
+    Returns ped_map: db_key -> (parent_a_db_key | None, parent_b_db_key | None).
+
+    NOTE: children are NOT derived from this map because the pedigree blob
+    appears to store more than just direct parent-child pairs (possibly full
+    lineage chains), which causes circular references when used for children.
+    Children are instead computed bottom-up from resolved parent fields.
+    """
+    conn = sqlite3.connect(path)
+    try:
+        data = _fetch_blob(conn, 'pedigree')
+        if not data:
+            return {}
+    except Exception:
+        return {}
+
+    NULL = 0xFFFF_FFFF_FFFF_FFFF
+    MAX_KEY = 1_000_000   # anything larger is a legacy UID or garbage
+    ped_map: dict = {}
+
+    # Entries start at offset 8 (after a single u64 header), stride 32
+    for pos in range(8, len(data) - 31, 32):
+        cat_k, pa_k, pb_k, extra = struct.unpack_from('<QQQQ', data, pos)
+        if cat_k == 0 or cat_k == NULL or cat_k > MAX_KEY:
+            continue
+        pa = int(pa_k) if pa_k != NULL and 0 < pa_k <= MAX_KEY else None
+        pb = int(pb_k) if pb_k != NULL and 0 < pb_k <= MAX_KEY else None
+        cat_key = int(cat_k)
+
+        existing = ped_map.get(cat_key)
+        if existing is None:
+            # No entry yet — take whatever we have
+            ped_map[cat_key] = (pa, pb)
+        elif existing[0] is None or existing[1] is None:
+            # Existing entry is incomplete — upgrade if this one is better
+            if pa is not None and pb is not None:
+                ped_map[cat_key] = (pa, pb)
+
+    return ped_map
+
+def load_current_day(path):
+    conn = sqlite3.connect(path)
+    return _fetch_blob(conn, 'current_day', 'properties')
 
 
 def load_bank_inventory(path: str) -> Inventory:
