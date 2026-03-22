@@ -1025,7 +1025,7 @@ class MainWindow(QMainWindow):
     def _open_cat_manager(self):
         from ui.cat_manager import CatManagerWindow
         if not hasattr(self, "_cat_manager_win") or self._cat_manager_win is None:
-            self._cat_manager_win = CatManagerWindow(self.ctrl.cats, parent=None)
+            self._cat_manager_win = CatManagerWindow(self.ctrl.cats, ctrl=self.ctrl, parent=None)
             self._cat_manager_win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             self._cat_manager_win.destroyed.connect(lambda: setattr(self, "_cat_manager_win", None))
         self._cat_manager_win.show()

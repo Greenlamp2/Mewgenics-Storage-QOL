@@ -322,6 +322,38 @@ class Cat:
     def parse(self, path):
         pass
 
+    # ── Rename ───────────────────────────────────────────────────────────────
+
+    def rename_in_blob(self, new_name: str) -> None:
+        """Patch the cat name inside ``_raw`` and shift all stored byte offsets.
+
+        After calling this method, ``self.name`` is updated and ``to_blob()``
+        will produce a blob containing the new name.  All subsequent parseable
+        fields (stat positions, personality anchor …) remain valid.
+        """
+        NAME_OFFSET = 12  # breed_id (u32 4 B) + uid (u64 8 B) = 12
+        old_char_count: int = struct.unpack_from('<Q', self._raw, NAME_OFFSET)[0]
+        old_name_bytes = old_char_count * 2
+
+        new_encoded = new_name.encode('utf-16-le')
+        new_char_count = len(new_name)   # char count, not byte count
+
+        # Reconstruct raw bytes: [before name] + [new u64 char count] + [new chars] + [rest]
+        before = self._raw[:NAME_OFFSET]
+        new_header = struct.pack('<Q', new_char_count)
+        after  = self._raw[NAME_OFFSET + 8 + old_name_bytes:]
+        self._raw = before + new_header + new_encoded + after
+
+        # Propagate byte shift to all position fields that follow the name
+        shift = len(new_encoded) - old_name_bytes
+        if shift:
+            self._personality_anchor += shift
+            self._pos_stat_base      += shift
+            self._pos_stat_mod       += shift
+            self._pos_stat_sec       += shift
+
+        self.name = new_name
+
     # ── Serialization ────────────────────────────────────────────────────────
 
     def to_raw(self) -> bytes:

@@ -192,6 +192,17 @@ class AppController:
         save_bank_inventory(self.sav_path, self.inventories["bank"])
         self._refresh_mtime()
 
+    # ------------------------------------------------------------------
+    # Cat rename
+    # ------------------------------------------------------------------
+
+    def apply_rename_cat(self, cat, new_name: str) -> None:
+        """Rename *cat* in-place, write its blob back to the save file."""
+        from utils.savers import save_cat
+        cat.rename_in_blob(new_name)
+        save_cat(self.sav_path, cat)
+        self._refresh_mtime()
+
     def _refresh_mtime(self):
         """Update loaded_mtime to the current file mtime (call after every write)."""
         try:

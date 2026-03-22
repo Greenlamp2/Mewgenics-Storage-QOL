@@ -142,6 +142,19 @@ def save_items_pool(pool):
         json.dump(pool, f, indent=2)
 
 
+def save_cat(sav_path: str, cat) -> None:
+    """Compress and persist a single cat blob to the ``cats`` table.
+
+    Call this after ``cat.rename_in_blob()`` (or any other in-place mutation)
+    to flush the changes back to the save file.
+    """
+    blob = cat.to_blob()
+    conn = sqlite3.connect(sav_path)
+    conn.execute("UPDATE cats SET data=? WHERE key=?", (blob, cat.db_key))
+    conn.commit()
+    conn.close()
+
+
 _BANK_FOLDERS_KEY = "bank_folders_v1"
 
 def save_bank_folders(sav_path: str, data: dict):

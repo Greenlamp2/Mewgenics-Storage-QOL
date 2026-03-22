@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
-    QSplitter, QPushButton, QGridLayout,
+    QSplitter, QPushButton, QGridLayout, QInputDialog, QMessageBox,
 )
 
 from catalogs.stat_catalog import STAT_NAMES
@@ -76,7 +76,7 @@ def _info_row(label: str, value: str, value_color: str = "#e0e0e0") -> QWidget:
 
 
 def _ability_entry(name: str, desc: str, bg: str, name_color: str, desc_color: str = "#999") -> QWidget:
-    """A single ability/mutation row: name on the left, description on the right (or below if long)."""
+    """A single ability/mutation row: name on top, description below."""
     w = QWidget()
     w.setStyleSheet(f"background: {bg}; border: 1px solid {name_color}22; border-radius: 5px;")
     lay = QVBoxLayout(w)
@@ -102,18 +102,12 @@ def _ability_entry(name: str, desc: str, bg: str, name_color: str, desc_color: s
 
 
 def _ability_list(
-    items,          # list[str]  OR  list[tuple[str, str]]
+    items,
     bg: str,
     name_color: str,
     desc_color: str = "#999",
     use_catalog: bool = True,
 ) -> QWidget:
-    """
-    Build a vertical list of _ability_entry widgets.
-    *items* can be:
-      - list[str]          → look up description from catalog if use_catalog=True
-      - list[(name, desc)] → use provided description directly
-    """
     w = QWidget()
     w.setStyleSheet("background: transparent;")
     lay = QVBoxLayout(w)
@@ -143,17 +137,11 @@ def _ability_list(
 
 class _CatCard(QFrame):
     """Compact clickable cat card shown in the list."""
-    selected = Signal(object)   # emits Cat
+    selected = Signal(object)
 
-    _NORMAL = (
-        "QFrame { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; }"
-    )
-    _HOVER = (
-        "QFrame { background: #242424; border: 1px solid #555; border-radius: 6px; }"
-    )
-    _ACTIVE = (
-        "QFrame { background: #1a2a1a; border: 1px solid #4caf50; border-radius: 6px; }"
-    )
+    _NORMAL = "QFrame { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; }"
+    _HOVER  = "QFrame { background: #242424; border: 1px solid #555; border-radius: 6px; }"
+    _ACTIVE = "QFrame { background: #1a2a1a; border: 1px solid #4caf50; border-radius: 6px; }"
 
     def __init__(self, cat, parent=None):
         super().__init__(parent)
@@ -166,7 +154,6 @@ class _CatCard(QFrame):
         lay.setContentsMargins(10, 6, 10, 6)
         lay.setSpacing(8)
 
-        # Gender pill
         g = cat.gender
         g_lbl = QLabel(_GENDER_SYMBOL.get(g, "?"))
         g_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -177,14 +164,13 @@ class _CatCard(QFrame):
         )
         lay.addWidget(g_lbl)
 
-        # Name + location
         center = QVBoxLayout()
         center.setSpacing(2)
-        name_lbl = QLabel(cat.name or "(unknown)")
-        name_lbl.setStyleSheet(
+        self._name_lbl = QLabel(cat.name or "(unknown)")
+        self._name_lbl.setStyleSheet(
             "color: #e8e8e8; font-size: 13px; font-weight: bold; background: transparent;"
         )
-        center.addWidget(name_lbl)
+        center.addWidget(self._name_lbl)
 
         status = cat.status
         room_text = cat.room if cat.room and cat.room != status else status
@@ -194,6 +180,10 @@ class _CatCard(QFrame):
         )
         center.addWidget(sub_lbl)
         lay.addLayout(center, 1)
+
+    def update_name(self):
+        """Refresh the displayed name from the underlying cat object."""
+        self._name_lbl.setText(self._cat.name or "(unknown)")
 
     def set_active(self, active: bool):
         self.setStyleSheet(self._ACTIVE if active else self._NORMAL)
@@ -221,8 +211,14 @@ class _CatCard(QFrame):
 class _CatDetail(QScrollArea):
     """Right-side scrollable detail panel for a selected cat."""
 
-    def __init__(self, parent=None):
+    # Emitted after a successful rename so the list can be refreshed
+    renamed = Signal(object)   # emits Cat
+
+    def __init__(self, ctrl=None, parent=None):
         super().__init__(parent)
+        self._ctrl = ctrl
+        self._current_cat = None
+
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setStyleSheet("QScrollArea { border: none; background: #111; }")
@@ -244,6 +240,8 @@ class _CatDetail(QScrollArea):
 
     def show_cat(self, cat) -> None:
         """Rebuild the detail panel for *cat*."""
+        self._current_cat = cat
+
         while self._layout.count():
             item = self._layout.takeAt(0)
             if item.widget():
@@ -255,13 +253,36 @@ class _CatDetail(QScrollArea):
         h_lay.setContentsMargins(0, 0, 0, 4)
         h_lay.setSpacing(4)
 
+        # Name row: label + optional rename button
+        name_row = QHBoxLayout()
+        name_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name_row.setSpacing(6)
+
         name_lbl = QLabel(cat.name or "(unknown)")
         name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         name_lbl.setWordWrap(True)
         name_lbl.setStyleSheet(
             "color: #f0f0f0; font-size: 20px; font-weight: bold; background: transparent;"
         )
-        h_lay.addWidget(name_lbl)
+        name_row.addWidget(name_lbl)
+
+        if self._ctrl is not None:
+            rename_btn = QPushButton("✏")
+            rename_btn.setFixedSize(28, 28)
+            rename_btn.setToolTip("Rename cat")
+            rename_btn.setStyleSheet(
+                "QPushButton { background: #222; border: 1px solid #555; border-radius: 4px;"
+                " color: #aaa; font-size: 13px; padding: 0; }"
+                "QPushButton:hover { background: #333; color: #fff; border-color: #888; }"
+                "QPushButton:pressed { background: #444; }"
+            )
+            rename_btn.clicked.connect(lambda: self._do_rename(cat))
+            name_row.addWidget(rename_btn)
+
+        name_row_w = QWidget()
+        name_row_w.setStyleSheet("background: transparent;")
+        name_row_w.setLayout(name_row)
+        h_lay.addWidget(name_row_w)
 
         # Special flags
         flags_row = QHBoxLayout()
@@ -322,17 +343,14 @@ class _CatDetail(QScrollArea):
         self._layout.addWidget(header)
         self._layout.addWidget(_hsep())
 
-        # ── Location ─────────────────────────────────────────────────
         if cat.room and cat.room not in (cat.status, ""):
             self._layout.addWidget(_info_row("Room", cat.room))
             self._layout.addWidget(_hsep())
 
-        # ── Stats ─────────────────────────────────────────────────────
         self._layout.addWidget(_section_label("📊  Stats"))
         self._layout.addWidget(self._build_stats_widget(cat))
         self._layout.addWidget(_hsep())
 
-        # ── Personality ───────────────────────────────────────────────
         self._layout.addWidget(_section_label("🧠  Personality"))
         pers_row = QHBoxLayout()
         pers_row.setSpacing(8)
@@ -344,8 +362,8 @@ class _CatDetail(QScrollArea):
             pill = QLabel(f"<b style='color:{color}'>{label}</b><br>{val}")
             pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
             pill.setStyleSheet(
-                f"background: #1c1c1c; border: 1px solid #333; border-radius: 5px;"
-                f" padding: 4px 8px; font-size: 11px; color: #ccc;"
+                "background: #1c1c1c; border: 1px solid #333; border-radius: 5px;"
+                " padding: 4px 8px; font-size: 11px; color: #ccc;"
             )
             pers_row.addWidget(pill, 1)
         pers_w = QWidget()
@@ -353,7 +371,6 @@ class _CatDetail(QScrollArea):
         self._layout.addWidget(pers_w)
         self._layout.addWidget(_hsep())
 
-        # ── Abilities ─────────────────────────────────────────────────
         self._layout.addWidget(_section_label("⚔️  Abilities"))
         self._layout.addWidget(
             _ability_list(cat.abilities, "#131d2a", "#5b9cf6", use_catalog=True)
@@ -378,7 +395,6 @@ class _CatDetail(QScrollArea):
                 _ability_list(equipment, "#1a1a2a", "#b0a0e0", use_catalog=False)
             )
 
-        # ── Mutations / Defects ───────────────────────────────────────
         mutation_chip_items = getattr(cat, "mutation_chip_items", [])
         defect_chip_items   = getattr(cat, "defect_chip_items",   [])
 
@@ -397,7 +413,6 @@ class _CatDetail(QScrollArea):
                                   desc_color="#b07820", use_catalog=False)
                 )
 
-        # ── Family ────────────────────────────────────────────────────
         self._layout.addWidget(_hsep())
         self._layout.addWidget(_section_label("👨‍👩‍👧  Family"))
         pa = cat.parent_a.name if cat.parent_a else "—"
@@ -411,6 +426,7 @@ class _CatDetail(QScrollArea):
         self._layout.addStretch()
 
     def clear(self):
+        self._current_cat = None
         while self._layout.count():
             item = self._layout.takeAt(0)
             if item.widget():
@@ -420,6 +436,30 @@ class _CatDetail(QScrollArea):
         empty.setStyleSheet("color: #555; font-size: 16px; background: transparent;")
         self._layout.addWidget(empty)
         self._layout.addStretch()
+
+    # ── Rename ───────────────────────────────────────────────────────
+
+    def _do_rename(self, cat) -> None:
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Cat", "New name:", text=cat.name or ""
+        )
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            QMessageBox.warning(self, "Invalid Name", "The name cannot be empty.")
+            return
+        if new_name == cat.name:
+            return
+        try:
+            self._ctrl.apply_rename_cat(cat, new_name)
+        except Exception as exc:
+            QMessageBox.critical(self, "Rename Failed", f"Could not save the new name:\n{exc}")
+            return
+        # Refresh the panel with the updated name
+        self.show_cat(cat)
+        # Signal the list to update the card label
+        self.renamed.emit(cat)
 
     # ── builders ─────────────────────────────────────────────────────
 
@@ -475,7 +515,7 @@ def _hsep() -> QFrame:
 class CatManagerWindow(QWidget):
     """Standalone window showing all cats parsed from the save file."""
 
-    def __init__(self, cats: list, parent=None):
+    def __init__(self, cats: list, ctrl=None, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
         self.setWindowTitle("Cat Manager")
         _icon = os.path.join(
@@ -487,6 +527,7 @@ class CatManagerWindow(QWidget):
         self.setStyleSheet("QWidget { background: #111111; color: #dddddd; }")
 
         self._cats = cats
+        self._ctrl = ctrl
         self._active_card: _CatCard | None = None
 
         # ── Filter bar ───────────────────────────────────────────────
@@ -539,7 +580,8 @@ class CatManagerWindow(QWidget):
         list_scroll.setStyleSheet("QScrollArea { border: none; background: #141414; }")
         list_scroll.setWidget(self._list_container)
 
-        self._detail = _CatDetail()
+        self._detail = _CatDetail(ctrl=ctrl)
+        self._detail.renamed.connect(self._on_cat_renamed)
 
         left_frame = QWidget()
         lf_lay = QVBoxLayout(left_frame)
@@ -587,7 +629,6 @@ class CatManagerWindow(QWidget):
                 item.widget().deleteLater()
 
         self._active_card = None
-        self._detail.clear()
 
         cats = self._filtered_cats()
         self._count_lbl.setText(f"{len(cats)} cat(s)")
@@ -599,9 +640,7 @@ class CatManagerWindow(QWidget):
             self._list_layout.addWidget(empty)
             return
 
-        cats_sorted = sorted(cats, key=lambda c: (c.name or ""))
-
-        for cat in cats_sorted:
+        for cat in sorted(cats, key=lambda c: (c.name or "").lower()):
             card = _CatCard(cat)
             card.selected.connect(self._on_cat_selected)
             self._list_layout.addWidget(card)
@@ -615,7 +654,7 @@ class CatManagerWindow(QWidget):
         for i in range(self._list_layout.count()):
             item = self._list_layout.itemAt(i)
             if item and item.widget() and isinstance(item.widget(), _CatCard):
-                card: _CatCard = item.widget()
+                card = item.widget()
                 if card._cat is cat:
                     card.set_active(True)
                     self._active_card = card
@@ -623,10 +662,35 @@ class CatManagerWindow(QWidget):
 
         self._detail.show_cat(cat)
 
+    def _on_cat_renamed(self, cat):
+        """Called after a successful rename: update the card label in-place."""
+        for i in range(self._list_layout.count()):
+            item = self._list_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), _CatCard):
+                card = item.widget()
+                if card._cat is cat:
+                    card.update_name()
+                    break
+        # Re-sort the list now that the name changed
+        self._rebuild_list()
+        # Re-select the cat in the new sorted order
+        self._reselect_cat(cat)
+
+    def _reselect_cat(self, cat):
+        """Find the card for *cat* in the (possibly re-sorted) list and activate it."""
+        for i in range(self._list_layout.count()):
+            item = self._list_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), _CatCard):
+                card = item.widget()
+                if card._cat is cat:
+                    card.set_active(True)
+                    self._active_card = card
+                    self._detail.show_cat(cat)
+                    break
+
     # ── Public refresh ────────────────────────────────────────────────
 
     def refresh(self, cats: list):
         """Update the cat list (called when the main window reloads)."""
         self._cats = cats
         self._rebuild_list()
-
