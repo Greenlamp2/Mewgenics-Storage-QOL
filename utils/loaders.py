@@ -316,6 +316,23 @@ def load_tokens(sav_path: str) -> dict[str, int]:
 
     return result
 
+def load_newborn_kills(path: str) -> int:
+    """Load the cumulative newborn-kill counter from the ``custom`` table."""
+    if not os.path.exists(path):
+        return 0
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE IF NOT EXISTS custom (key TEXT PRIMARY KEY, data TEXT)")
+        conn.commit()
+        row = conn.execute(
+            "SELECT data FROM custom WHERE key='newborn_kills'"
+        ).fetchone()
+        conn.close()
+        return int(row[0]) if row and row[0] else 0
+    except Exception:
+        return 0
+
+
 def load_items_pool():
     if not os.path.exists(ITEMS_POOL_PATH):
         return {}

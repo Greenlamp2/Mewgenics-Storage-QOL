@@ -13,10 +13,10 @@ from catalogs.itemcatalog import item_catalog
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, \
     load_save_properties, load_cats_count, load_bank_inventory, load_bank_folders, SAVE_INFO_KEYS, \
     load_house_state_raw, load_adventure_keys, load_cats, load_pedigree, \
-    load_current_day, load_cat_bank
+    load_current_day, load_cat_bank, load_newborn_kills
 from utils.savers import save_inventories as _save_inventories, save_tokens, \
     save_bank_inventory, save_items_pool, save_bank_folders, save_house_state, \
-    save_cat_bank, save_new_cat
+    save_cat_bank, save_new_cat, save_newborn_kills, save_gold as _save_gold
 
 # Rarities that should never appear in any view
 EXCLUDED_RARITIES = {"sidequest", "quest"}
@@ -50,6 +50,8 @@ class AppController:
         # house_state round-trip helpers (set by load_data / apply_bank_cat / apply_unbank_cat)
         self._house_state_prefix:  bytes = b'\x00\x00\x00\x00'
         self._house_state_entries: dict  = {}  # {cat_key: raw_entry_bytes} currently in house_state
+        self._house_state_info:    dict  = {}  # {cat_key: room_name} mirror for room lookups
+        self.newborn_kill_count:   int   = 0
 
     # ------------------------------------------------------------------
     # Data loading
@@ -110,11 +112,13 @@ class AppController:
         hs_prefix, house, hs_entries = load_house_state_raw(self.sav_path)
         self._house_state_prefix  = hs_prefix
         self._house_state_entries = hs_entries
+        self._house_state_info    = dict(house)  # kept in sync for room lookups
 
         # Load cat bank
         self.cat_bank = load_cat_bank(self.sav_path)
         ped_map = load_pedigree(self.sav_path)
         current_day = load_current_day(self.sav_path)
+        self.newborn_kill_count = load_newborn_kills(self.sav_path)
 
         cats, errors = [], []
         for key, blob in raw_cats:
@@ -385,6 +389,145 @@ class AppController:
             save_cat_bank(self.sav_path, self.cat_bank)
             self._refresh_mtime()
         return unbanked
+
+    # ------------------------------------------------------------------
+    # Cat room management & newborn deletion
+    # ------------------------------------------------------------------
+
+    def get_available_rooms(self) -> list[str]:
+        """Return sorted list of unique room names from the current house state."""
+        rooms = {r for r in self._house_state_info.values() if r}
+        return sorted(rooms)
+
+    @staticmethod
+    def _rebuild_cat_entry_bytes(entry: bytes, cat_key: int, new_room: str) -> bytes:
+        """Return a new house_state entry with *new_room*, preserving unknown fields."""
+        import struct as _struct
+        unk1         = _struct.unpack_from('<I', entry, 4)[0]  if len(entry) >= 8  else 0
+        old_room_len = _struct.unpack_from('<I', entry, 8)[0]  if len(entry) >= 12 else 0
+        unk2         = _struct.unpack_from('<I', entry, 12)[0] if len(entry) >= 16 else 0
+        tail_start   = 16 + old_room_len
+        tail = entry[tail_start:tail_start + 24] if len(entry) >= tail_start + 24 else b'\x00' * 24
+        room_enc = new_room.encode('ascii', errors='replace')
+        return (
+            _struct.pack('<II', cat_key, unk1)
+            + _struct.pack('<II', len(room_enc), unk2)
+            + room_enc
+            + tail
+        )
+
+    def apply_move_cat_room(self, cat, new_room: str) -> None:
+        """Move an In-House cat to *new_room* by rewriting its house_state entry."""
+        if cat.status != "In House":
+            raise ValueError(
+                f"Only 'In House' cats can be moved to a room "
+                f"('{cat.name}' is '{cat.status}')."
+            )
+        entry = self._house_state_entries.get(cat.db_key)
+        if entry is None:
+            raise ValueError(f"No house_state entry for '{cat.name}'.")
+        new_entry = self._rebuild_cat_entry_bytes(entry, cat.db_key, new_room)
+        self._house_state_entries[cat.db_key] = new_entry
+        self._house_state_info[cat.db_key]    = new_room
+        cat.room = new_room
+        save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+        self._refresh_mtime()
+
+    def apply_move_cats_room_multiple(self, cats: list, new_room: str) -> int:
+        """Move multiple In-House cats to *new_room* in a single write.
+
+        Silently skips cats that are not In House.
+        Returns the number of cats actually moved.
+        """
+        moved = 0
+        for cat in cats:
+            if cat.status != "In House":
+                continue
+            entry = self._house_state_entries.get(cat.db_key)
+            if entry is None:
+                continue
+            new_entry = self._rebuild_cat_entry_bytes(entry, cat.db_key, new_room)
+            self._house_state_entries[cat.db_key] = new_entry
+            self._house_state_info[cat.db_key]    = new_room
+            cat.room = new_room
+            moved += 1
+        if moved:
+            save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+            self._refresh_mtime()
+        return moved
+
+    def apply_delete_cat(self, cat) -> tuple[int, int]:
+        """Mark *cat* as gone (newborn trash).
+
+        The row in the ``cats`` table is **never deleted** so pedigree data
+        remains intact.  The cat is only removed from ``house_state`` /
+        ``cat_bank`` tracking (which makes it appear as ``"Gone"`` on the next
+        load), and its in-memory ``status`` is set to ``"Gone"`` immediately.
+
+        Updates the newborn-kill counter and awards 25 gold for every 10 kills.
+        Returns ``(new_kill_count, gold_awarded)``.
+        """
+        if cat.status == "In House":
+            self._house_state_entries.pop(cat.db_key, None)
+            self._house_state_info.pop(cat.db_key, None)
+            save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+        elif cat.status == "In Bank":
+            self.cat_bank.pop(cat.db_key, None)
+            save_cat_bank(self.sav_path, self.cat_bank)
+
+        # Mark gone in memory — row stays in the cats table
+        cat.status = "Gone"
+        cat.room   = ""
+
+        self.newborn_kill_count += 1
+        gold_awarded = 0
+        if self.newborn_kill_count % 10 == 0:
+            gold_awarded = 25
+            self.golds += gold_awarded
+            _save_gold(self.sav_path, self.golds)
+
+        save_newborn_kills(self.sav_path, self.newborn_kill_count)
+        self._refresh_mtime()
+        return self.newborn_kill_count, gold_awarded
+
+    def apply_delete_cats_multiple(self, cats: list) -> tuple[int, int]:
+        """Mark multiple cats as gone (newborn trash).
+
+        Like ``apply_delete_cat``, no rows are deleted from the ``cats`` table.
+        Returns ``(n_deleted, total_gold_awarded)``.
+        """
+        if not cats:
+            return 0, 0
+        hs_changed   = False
+        bank_changed = False
+        total_gold   = 0
+
+        for cat in cats:
+            if cat.status == "In House":
+                self._house_state_entries.pop(cat.db_key, None)
+                self._house_state_info.pop(cat.db_key, None)
+                hs_changed = True
+            elif cat.status == "In Bank":
+                self.cat_bank.pop(cat.db_key, None)
+                bank_changed = True
+            # Mark gone in memory — row stays in the cats table
+            cat.status = "Gone"
+            cat.room   = ""
+            self.newborn_kill_count += 1
+            if self.newborn_kill_count % 10 == 0:
+                total_gold += 25
+
+        if hs_changed:
+            save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+        if bank_changed:
+            save_cat_bank(self.sav_path, self.cat_bank)
+        if total_gold:
+            self.golds += total_gold
+            _save_gold(self.sav_path, self.golds)
+
+        save_newborn_kills(self.sav_path, self.newborn_kill_count)
+        self._refresh_mtime()
+        return len(cats), total_gold
 
     def apply_send_cats_multiple(self, cats: list) -> int:
         """Send multiple cats as gifts in one batch. Returns count sent."""

@@ -224,6 +224,37 @@ class _CatCard(QFrame):
         center.addWidget(sub_lbl)
         lay.addLayout(center, 1)
 
+        # ── Right-side badges: mutation count + defect + disorder indicators ────
+        mut_count = len(getattr(cat, "mutation_chip_items", []))
+        def_count = len(getattr(cat, "defect_chip_items",   []))
+        dis_count = len(getattr(cat, "disorders",           []))
+
+        badge_parts = []
+        if mut_count > 0:
+            badge_parts.append((f"🧬 {mut_count}", "#80bbdd", "#0e1a22", "#2a4a5a"))
+        if def_count > 0:
+            badge_parts.append((f"⚡ {def_count}", "#e0a030", "#221800", "#5a3a00"))
+        if dis_count > 0:
+            badge_parts.append((f"⚠ {dis_count}", "#e05050", "#220e0e", "#5a1a1a"))
+
+        if badge_parts:
+            badges_row = QHBoxLayout()
+            badges_row.setSpacing(3)
+            badges_row.setContentsMargins(0, 0, 0, 0)
+            badges_row.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+            for text, fg, bg, border in badge_parts:
+                lbl = QLabel(text)
+                lbl.setStyleSheet(
+                    f"color: {fg}; font-size: 10px; background: {bg};"
+                    f" border: 1px solid {border}; border-radius: 3px; padding: 1px 4px;"
+                )
+                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                badges_row.addWidget(lbl)
+            badges_w = QWidget()
+            badges_w.setStyleSheet("background: transparent;")
+            badges_w.setLayout(badges_row)
+            lay.addWidget(badges_w)
+
     def update_name(self):
         """Refresh the displayed name from the underlying cat object."""
         self._name_lbl.setText(self._cat.name or "(unknown)")
@@ -277,6 +308,10 @@ class _CatDetail(QScrollArea):
     banked  = Signal(object)   # emits Cat
     # Emitted after a successful send-cat gift so the list can be rebuilt
     sent    = Signal(object)   # emits Cat
+    # Emitted after a room move
+    moved   = Signal(object)   # emits Cat
+    # Emitted after a cat is deleted; carries (cat, kill_count, gold_awarded)
+    deleted = Signal(object, int, int)
 
     def __init__(self, ctrl=None, parent=None):
         super().__init__(parent)
@@ -382,6 +417,33 @@ class _CatDetail(QScrollArea):
                 )
                 send_btn.clicked.connect(lambda: self._do_send_cat(cat))
                 name_row.addWidget(send_btn)
+
+            # ── Newborn-only actions ─────────────────────────────────
+            if getattr(cat, "age", None) == 1:
+                if cat.status == "In House":
+                    move_btn = QPushButton("📍")
+                    move_btn.setFixedSize(28, 28)
+                    move_btn.setToolTip("Move to a different room")
+                    move_btn.setStyleSheet(
+                        "QPushButton { background: #1a2a1a; border: 1px solid #3a8a3a; border-radius: 4px;"
+                        " color: #88cc88; font-size: 13px; padding: 0; }"
+                        "QPushButton:hover { background: #223022; color: #aaffaa; border-color: #55aa55; }"
+                        "QPushButton:pressed { background: #2a3a2a; }"
+                    )
+                    move_btn.clicked.connect(lambda: self._do_move_room(cat))
+                    name_row.addWidget(move_btn)
+
+                del_btn = QPushButton("🗑")
+                del_btn.setFixedSize(28, 28)
+                del_btn.setToolTip("Permanently delete this newborn")
+                del_btn.setStyleSheet(
+                    "QPushButton { background: #2a0a0a; border: 1px solid #992222; border-radius: 4px;"
+                    " color: #cc4444; font-size: 13px; padding: 0; }"
+                    "QPushButton:hover { background: #3a1010; color: #ff6666; border-color: #cc3333; }"
+                    "QPushButton:pressed { background: #4a1a1a; }"
+                )
+                del_btn.clicked.connect(lambda: self._do_delete_cat(cat))
+                name_row.addWidget(del_btn)
 
         name_row_w = QWidget()
         name_row_w.setStyleSheet("background: transparent;")
@@ -637,6 +699,51 @@ class _CatDetail(QScrollArea):
         self.show_cat(cat)
         self.sent.emit(cat)
 
+    def _do_move_room(self, cat) -> None:
+        """Show a dialog to pick a new room for *cat*."""
+        rooms = self._ctrl.get_available_rooms() if self._ctrl else []
+        if not rooms:
+            QMessageBox.information(self, "No Rooms", "No rooms found in the current house state.")
+            return
+        from PySide6.QtWidgets import QInputDialog
+        room, ok = QInputDialog.getItem(
+            self, "Move to Room",
+            f"Choose destination room for <b>{cat.name}</b>:",
+            rooms, 0, False,
+        )
+        if not ok or not room:
+            return
+        if room == cat.room:
+            return
+        try:
+            self._ctrl.apply_move_cat_room(cat, room)
+        except Exception as exc:
+            QMessageBox.critical(self, "Move Failed", f"Could not move cat:\n{exc}")
+            return
+        self.show_cat(cat)
+        self.moved.emit(cat)
+
+    def _do_delete_cat(self, cat) -> None:
+        """Permanently delete *cat* after confirmation."""
+        kills_now   = getattr(self._ctrl, "newborn_kill_count", 0) if self._ctrl else 0
+        next_reward = 10 - (kills_now % 10)
+        reply = QMessageBox.question(
+            self, "🗑 Delete Newborn",
+            f"<b>Permanently delete {cat.name}?</b><br><br>"
+            f"This cannot be undone.<br>"
+            f"Kill counter: <b>{kills_now}</b> — "
+            f"next 🪙 25 gold reward in <b>{next_reward}</b> more kill(s).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            new_count, gold = self._ctrl.apply_delete_cat(cat)
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Failed", f"Could not delete cat:\n{exc}")
+            return
+        self.deleted.emit(cat, new_count, gold)
+
     # ── builders ─────────────────────────────────────────────────────
 
     @staticmethod
@@ -715,6 +822,9 @@ class CatManagerWindow(QWidget):
         fb_lay.setSpacing(6)
 
         self._filter = "house"
+        self._sub_filter       = "all"   # mutation/disorder sub-filter for the "newborns" tab
+        self._gender_filter    = "all"   # gender sub-filter for the "newborns" tab
+        self._sexuality_filter = "all"   # sexuality sub-filter for the "newborns" tab
         _btn_style_active = (
             "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #4caf50;"
             " border-radius: 4px; background: #1a2d1a; color: #4caf50; font-weight: bold; }"
@@ -724,14 +834,28 @@ class CatManagerWindow(QWidget):
             " border-radius: 4px; background: #1e1e1e; color: #aaa; }"
             "QPushButton:hover { background: #282828; color: #ccc; }"
         )
+        _newborn_active = (
+            "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #e0c060;"
+            " border-radius: 4px; background: #2a2510; color: #e0c060; font-weight: bold; }"
+        )
+        _newborn_normal = (
+            "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #444;"
+            " border-radius: 4px; background: #1e1e1e; color: #aaa; }"
+            "QPushButton:hover { background: #282820; color: #e0c060; }"
+        )
         self._filter_btns: dict[str, QPushButton] = {}
         self._filter_btn_active_style = _btn_style_active
         self._filter_btn_normal_style = _btn_style
 
-        # Only "In House", "Adventure" and "In Bank" — no "All"
-        for key, label in [("house", "🏠 In House"), ("adventure", "⚔️ Adventure"), ("bank", "🏦 In Bank")]:
+        # Only "In House", "Adventure", "In Bank" and "Newborns" — no "All"
+        for key, label in [("house", "🏠 In House"), ("adventure", "⚔️ Adventure"),
+                            ("bank", "🏦 In Bank"), ("newborns", "🍼 Newborns")]:
             btn = QPushButton(label)
-            btn.setStyleSheet(_btn_style_active if key == self._filter else _btn_style)
+            if key == "newborns":
+                btn.setStyleSheet(_newborn_active if key == self._filter else _newborn_normal)
+                btn.setProperty("newborn_btn", True)
+            else:
+                btn.setStyleSheet(_btn_style_active if key == self._filter else _btn_style)
             btn.clicked.connect(lambda _=False, k=key: self._set_filter(k))
             self._filter_btns[key] = btn
             fb_lay.addWidget(btn)
@@ -751,6 +875,166 @@ class CatManagerWindow(QWidget):
         recv_btn.setStyleSheet(_recv_style)
         recv_btn.clicked.connect(self._on_receive_cats)
         fb_lay.addWidget(recv_btn)
+
+        # ── Newborns sub-filter bar (hidden unless "newborns" tab active) ──
+        self._sub_filter_bar = QWidget()
+        self._sub_filter_bar.setStyleSheet(
+            "QWidget { background: #131308; border-bottom: 1px solid #3a3800; }"
+        )
+        sfb_root = QVBoxLayout(self._sub_filter_bar)
+        sfb_root.setContentsMargins(10, 4, 10, 4)
+        sfb_root.setSpacing(3)
+
+        # ── Row 1: mutation / disorder filter ────────────────────────
+        sfb_lay = QHBoxLayout()
+        sfb_lay.setContentsMargins(0, 0, 0, 0)
+        sfb_lay.setSpacing(6)
+
+        sfb_lbl = QLabel("Filter:")
+        sfb_lbl.setStyleSheet("color: #888; font-size: 11px; background: transparent;")
+        sfb_lay.addWidget(sfb_lbl)
+
+        _sf_active = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #e0c060;"
+            " border-radius: 4px; background: #2a2510; color: #e0c060; font-weight: bold; }"
+        )
+        _sf_normal = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #333;"
+            " border-radius: 4px; background: #1a1a14; color: #999; }"
+            "QPushButton:hover { background: #222218; color: #e0c060; }"
+        )
+        self._sub_filter_btn_active_style = _sf_active
+        self._sub_filter_btn_normal_style = _sf_normal
+        self._sub_filter_btns: dict[str, QPushButton] = {}
+
+        for sf_key, sf_label in [
+            ("all",      "🐱 All"),
+            ("defects",  "⚠ Has Disorders"),
+            ("lt8",      "🧬 < 8 Mutations"),
+            ("eq8",      "🧬 8 Mutations"),
+            ("eq9",      "🧬 9 Mutations"),
+            ("eq10",     "🧬 10 Mutations"),
+        ]:
+            sb = QPushButton(sf_label)
+            sb.setStyleSheet(_sf_active if sf_key == "all" else _sf_normal)
+            sb.clicked.connect(lambda _=False, k=sf_key: self._set_sub_filter(k))
+            self._sub_filter_btns[sf_key] = sb
+            sfb_lay.addWidget(sb)
+
+        sfb_lay.addStretch()
+
+        self._kill_count_lbl = QLabel("")
+        self._kill_count_lbl.setStyleSheet(
+            "color: #cc6666; font-size: 11px; background: transparent;"
+        )
+        sfb_lay.addWidget(self._kill_count_lbl)
+        sfb_root.addLayout(sfb_lay)
+
+        # ── Row 2: gender filter ──────────────────────────────────────
+        sgf_lay = QHBoxLayout()
+        sgf_lay.setContentsMargins(0, 0, 0, 0)
+        sgf_lay.setSpacing(6)
+
+        sgf_lbl = QLabel("Gender:")
+        sgf_lbl.setStyleSheet("color: #888; font-size: 11px; background: transparent;")
+        sgf_lay.addWidget(sgf_lbl)
+
+        _gf_active_all = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #e0c060;"
+            " border-radius: 4px; background: #2a2510; color: #e0c060; font-weight: bold; }"
+        )
+        _gf_active_m = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #5b9cf6;"
+            " border-radius: 4px; background: #101828; color: #5b9cf6; font-weight: bold; }"
+        )
+        _gf_active_f = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #f47abf;"
+            " border-radius: 4px; background: #28101e; color: #f47abf; font-weight: bold; }"
+        )
+        _gf_active_d = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #aaaaaa;"
+            " border-radius: 4px; background: #1e1e1e; color: #cccccc; font-weight: bold; }"
+        )
+        _gf_normal = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #333;"
+            " border-radius: 4px; background: #1a1a14; color: #999; }"
+            "QPushButton:hover { background: #1a1a1e; color: #ccccff; }"
+        )
+        self._gender_filter_btn_styles = {
+            "all":    _gf_active_all,
+            "male":   _gf_active_m,
+            "female": _gf_active_f,
+            "ditto":  _gf_active_d,
+        }
+        self._gender_filter_btn_normal = _gf_normal
+        self._gender_filter_btns: dict[str, QPushButton] = {}
+
+        for gf_key, gf_label in [
+            ("all",    "⚥ All"),
+            ("male",   "♂ Male"),
+            ("female", "♀ Female"),
+            ("ditto",  "🔀 Ditto"),
+        ]:
+            gb = QPushButton(gf_label)
+            gb.setStyleSheet(_gf_active_all if gf_key == "all" else _gf_normal)
+            gb.clicked.connect(lambda _=False, k=gf_key: self._set_gender_filter(k))
+            self._gender_filter_btns[gf_key] = gb
+            sgf_lay.addWidget(gb)
+
+        sgf_lay.addStretch()
+        sfb_root.addLayout(sgf_lay)
+
+        # ── Row 3: sexuality filter ───────────────────────────────────
+        ssf_lay = QHBoxLayout()
+        ssf_lay.setContentsMargins(0, 0, 0, 0)
+        ssf_lay.setSpacing(6)
+
+        ssf_lbl = QLabel("Sexuality:")
+        ssf_lbl.setStyleSheet("color: #888; font-size: 11px; background: transparent;")
+        ssf_lay.addWidget(ssf_lbl)
+
+        _sxf_active_all = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #e0c060;"
+            " border-radius: 4px; background: #2a2510; color: #e0c060; font-weight: bold; }"
+        )
+        _sxf_active_gay = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #ff80ab;"
+            " border-radius: 4px; background: #280018; color: #ff80ab; font-weight: bold; }"
+        )
+        _sxf_active_str = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #80d8ff;"
+            " border-radius: 4px; background: #001828; color: #80d8ff; font-weight: bold; }"
+        )
+        _sxf_active_bi = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #ce93d8;"
+            " border-radius: 4px; background: #1a0820; color: #ce93d8; font-weight: bold; }"
+        )
+        _sxf_normal = _gf_normal
+        self._sexuality_filter_btn_styles = {
+            "all":      _sxf_active_all,
+            "gay":      _sxf_active_gay,
+            "straight": _sxf_active_str,
+            "bi":       _sxf_active_bi,
+        }
+        self._sexuality_filter_btn_normal = _sxf_normal
+        self._sexuality_filter_btns: dict[str, QPushButton] = {}
+
+        for sx_key, sx_label in [
+            ("all",      "💕 All"),
+            ("straight", "💙 Straight"),
+            ("gay",      "🌈 Gay"),
+            ("bi",       "💜 Bi"),
+        ]:
+            sb2 = QPushButton(sx_label)
+            sb2.setStyleSheet(_sxf_active_all if sx_key == "all" else _sxf_normal)
+            sb2.clicked.connect(lambda _=False, k=sx_key: self._set_sexuality_filter(k))
+            self._sexuality_filter_btns[sx_key] = sb2
+            ssf_lay.addWidget(sb2)
+
+        ssf_lay.addStretch()
+        sfb_root.addLayout(ssf_lay)
+
+        self._sub_filter_bar.hide()
 
         # ── Splitter: list | detail ───────────────────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -772,6 +1056,8 @@ class CatManagerWindow(QWidget):
         self._detail.renamed.connect(self._on_cat_renamed)
         self._detail.banked.connect(self._on_cat_banked)
         self._detail.sent.connect(self._on_cat_sent)
+        self._detail.moved.connect(self._on_cat_moved)
+        self._detail.deleted.connect(self._on_cat_deleted)
 
         # ── Multi-select action bar (hidden until cats are selected) ─
         self._ms_bar = QWidget()
@@ -798,17 +1084,23 @@ class CatManagerWindow(QWidget):
             )
             return b
 
-        self._ms_bank_btn   = _ms_btn("🏦 Bank",    "#5555aa", "#1a1a3a", "#aaaaff")
-        self._ms_unbank_btn = _ms_btn("🏠 Unbank",  "#4caf50", "#1a2a1a", "#66cc66")
-        self._ms_gift_btn   = _ms_btn("🎁 Gift",    "#aa5555", "#2a1a1a", "#ff9999")
+        self._ms_bank_btn      = _ms_btn("🏦 Bank",       "#5555aa", "#1a1a3a", "#aaaaff")
+        self._ms_unbank_btn    = _ms_btn("🏠 Unbank",     "#4caf50", "#1a2a1a", "#66cc66")
+        self._ms_move_room_btn = _ms_btn("📍 Move Room",  "#3a8a3a", "#0e1a0e", "#88cc88")
+        self._ms_gift_btn      = _ms_btn("🎁 Gift",       "#aa5555", "#2a1a1a", "#ff9999")
+        self._ms_delete_btn    = _ms_btn("🗑 Delete",     "#992222", "#2a0a0a", "#cc4444")
 
         self._ms_bank_btn.clicked.connect(self._ms_do_bank)
         self._ms_unbank_btn.clicked.connect(self._ms_do_unbank)
+        self._ms_move_room_btn.clicked.connect(self._ms_do_move_room)
         self._ms_gift_btn.clicked.connect(self._ms_do_send_gift)
+        self._ms_delete_btn.clicked.connect(self._ms_do_delete)
 
         ms_lay.addWidget(self._ms_bank_btn)
         ms_lay.addWidget(self._ms_unbank_btn)
+        ms_lay.addWidget(self._ms_move_room_btn)
         ms_lay.addWidget(self._ms_gift_btn)
+        ms_lay.addWidget(self._ms_delete_btn)
 
         clear_ms_btn = QPushButton("✕")
         clear_ms_btn.setFixedSize(22, 22)
@@ -839,6 +1131,7 @@ class CatManagerWindow(QWidget):
         root_lay.setContentsMargins(0, 0, 0, 0)
         root_lay.setSpacing(0)
         root_lay.addWidget(filter_bar)
+        root_lay.addWidget(self._sub_filter_bar)
         root_lay.addWidget(splitter, 1)
 
         self._rebuild_list()
@@ -847,12 +1140,76 @@ class CatManagerWindow(QWidget):
 
     def _set_filter(self, key: str):
         self._filter = key
+        _newborn_active = (
+            "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #e0c060;"
+            " border-radius: 4px; background: #2a2510; color: #e0c060; font-weight: bold; }"
+        )
+        _newborn_normal = (
+            "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #444;"
+            " border-radius: 4px; background: #1e1e1e; color: #aaa; }"
+            "QPushButton:hover { background: #282820; color: #e0c060; }"
+        )
         for k, btn in self._filter_btns.items():
-            btn.setStyleSheet(
-                self._filter_btn_active_style if k == key
-                else self._filter_btn_normal_style
-            )
+            if k == "newborns":
+                btn.setStyleSheet(_newborn_active if k == key else _newborn_normal)
+            else:
+                btn.setStyleSheet(
+                    self._filter_btn_active_style if k == key
+                    else self._filter_btn_normal_style
+                )
+        # Show/hide sub-filter bar
+        if key == "newborns":
+            self._sub_filter_bar.show()
+            self._refresh_kill_counter()
+        else:
+            self._sub_filter_bar.hide()
+            # Reset all sub-filters so they're clean next time
+            self._sub_filter       = "all"
+            self._gender_filter    = "all"
+            self._sexuality_filter = "all"
+            for k, btn in self._sub_filter_btns.items():
+                btn.setStyleSheet(
+                    self._sub_filter_btn_active_style if k == "all"
+                    else self._sub_filter_btn_normal_style
+                )
+            for k, btn in self._gender_filter_btns.items():
+                btn.setStyleSheet(
+                    self._gender_filter_btn_styles["all"] if k == "all"
+                    else self._gender_filter_btn_normal
+                )
+            for k, btn in self._sexuality_filter_btns.items():
+                btn.setStyleSheet(
+                    self._sexuality_filter_btn_styles["all"] if k == "all"
+                    else self._sexuality_filter_btn_normal
+                )
         self._clear_ms_selection()
+        self._rebuild_list()
+
+    def _set_sub_filter(self, key: str):
+        self._sub_filter = key
+        for k, btn in self._sub_filter_btns.items():
+            btn.setStyleSheet(
+                self._sub_filter_btn_active_style if k == key
+                else self._sub_filter_btn_normal_style
+            )
+        self._rebuild_list()
+
+    def _set_gender_filter(self, key: str):
+        self._gender_filter = key
+        for k, btn in self._gender_filter_btns.items():
+            btn.setStyleSheet(
+                self._gender_filter_btn_styles.get(k, self._gender_filter_btn_normal)
+                if k == key else self._gender_filter_btn_normal
+            )
+        self._rebuild_list()
+
+    def _set_sexuality_filter(self, key: str):
+        self._sexuality_filter = key
+        for k, btn in self._sexuality_filter_btns.items():
+            btn.setStyleSheet(
+                self._sexuality_filter_btn_styles.get(k, self._sexuality_filter_btn_normal)
+                if k == key else self._sexuality_filter_btn_normal
+            )
         self._rebuild_list()
 
     def _filtered_cats(self) -> list:
@@ -862,6 +1219,38 @@ class CatManagerWindow(QWidget):
             return [c for c in self._cats if c.status == "Adventure"]
         if self._filter == "bank":
             return [c for c in self._cats if c.status == "In Bank"]
+        if self._filter == "newborns":
+            babies = [
+                c for c in self._cats
+                if getattr(c, "age", None) == 1 and c.status != "Gone"
+            ]
+            # ── Mutation / disorder sub-filter ────────────────────────
+            sf = self._sub_filter
+            if sf == "defects":
+                babies = [c for c in babies if getattr(c, "disorders", [])]
+            elif sf != "all":
+                mut_count = lambda c: len(getattr(c, "mutation_chip_items", []))
+                if sf == "lt8":
+                    babies = [c for c in babies if mut_count(c) < 8]
+                elif sf == "eq8":
+                    babies = [c for c in babies if mut_count(c) == 8]
+                elif sf == "eq9":
+                    babies = [c for c in babies if mut_count(c) == 9]
+                elif sf == "eq10":
+                    babies = [c for c in babies if mut_count(c) == 10]
+            # ── Gender sub-filter ─────────────────────────────────────
+            gf = self._gender_filter
+            if gf == "male":
+                babies = [c for c in babies if c.gender == "male"]
+            elif gf == "female":
+                babies = [c for c in babies if c.gender == "female"]
+            elif gf == "ditto":
+                babies = [c for c in babies if c.gender == "?"]
+            # ── Sexuality sub-filter ──────────────────────────────────
+            sxf = self._sexuality_filter
+            if sxf != "all":
+                babies = [c for c in babies if getattr(c, "sexuality", "straight") == sxf]
+            return babies
         return list(self._cats)
 
     # ── List ─────────────────────────────────────────────────────────
@@ -908,6 +1297,13 @@ class CatManagerWindow(QWidget):
                 self._list_layout.addWidget(header)
                 for cat in room_cats:
                     _add_card(cat)
+        elif self._filter == "newborns":
+            # Sort by mutation count descending, then name
+            for cat in sorted(
+                cats,
+                key=lambda c: (-len(getattr(c, "mutation_chip_items", [])), (c.name or "").lower())
+            ):
+                _add_card(cat)
         else:
             for cat in sorted(cats, key=lambda c: (c.name or "").lower()):
                 _add_card(cat)
@@ -968,16 +1364,32 @@ class CatManagerWindow(QWidget):
         n = len(self._ms_selected)
         if n == 0:
             self._ms_bar.hide()
+            return
+
+        self._ms_count_lbl.setText(
+            f"{n} cat{'s' if n > 1 else ''} selected  —  Ctrl+click to add/remove"
+        )
+        is_house    = self._filter == "house"
+        is_bank     = self._filter == "bank"
+        is_newborns = self._filter == "newborns"
+
+        has_house = any(c.status == "In House" for c in self._ms_selected)
+        has_bank  = any(c.status == "In Bank"  for c in self._ms_selected)
+
+        if is_newborns:
+            self._ms_bank_btn.setVisible(has_house)
+            self._ms_unbank_btn.setVisible(has_bank)
+            self._ms_move_room_btn.setVisible(has_house)
+            self._ms_gift_btn.setVisible(has_house or has_bank)
+            self._ms_delete_btn.setVisible(True)
         else:
-            self._ms_count_lbl.setText(
-                f"{n} cat{'s' if n > 1 else ''} selected  —  Ctrl+click to add/remove"
-            )
-            is_house = self._filter == "house"
-            is_bank  = self._filter == "bank"
             self._ms_bank_btn.setVisible(is_house)
             self._ms_unbank_btn.setVisible(is_bank)
+            self._ms_move_room_btn.setVisible(is_house)
             self._ms_gift_btn.setVisible(is_house or is_bank)
-            self._ms_bar.show()
+            self._ms_delete_btn.setVisible(False)
+
+        self._ms_bar.show()
 
         # Refresh "Select all / Deselect all" label on room headers
         self._refresh_room_header_states()
@@ -1145,6 +1557,93 @@ class CatManagerWindow(QWidget):
         self._ms_selected.discard(cat)
         self._rebuild_list()
         self._detail.clear()
+
+    def _on_cat_moved(self, cat):
+        """Called after a room move: rebuild the list and reselect the cat."""
+        self._rebuild_list()
+        self._reselect_cat(cat)
+
+    def _on_cat_deleted(self, cat, kill_count: int, gold_awarded: int):
+        """Called after a newborn is trashed (marked Gone, row kept in DB)."""
+        self._ms_selected.discard(cat)
+        self._rebuild_list()   # cat is now Gone — excluded from newborns filter
+        self._detail.clear()
+        self._refresh_kill_counter()
+        if gold_awarded:
+            QMessageBox.information(
+                self, "🪙 Reward!",
+                f"10 newborns trashed!<br><b>+{gold_awarded} gold</b> added to your save.",
+            )
+
+    def _ms_do_move_room(self):
+        """Move all ms-selected In-House cats to a chosen room."""
+        house_cats = [c for c in self._ms_selected if c.status == "In House"]
+        if not house_cats or self._ctrl is None:
+            return
+        rooms = self._ctrl.get_available_rooms()
+        if not rooms:
+            QMessageBox.information(self, "No Rooms", "No rooms found in the current house state.")
+            return
+        from PySide6.QtWidgets import QInputDialog
+        room, ok = QInputDialog.getItem(
+            self, "Move to Room",
+            f"Choose destination room for {len(house_cats)} cat(s):",
+            rooms, 0, False,
+        )
+        if not ok or not room:
+            return
+        try:
+            moved = self._ctrl.apply_move_cats_room_multiple(house_cats, room)
+        except Exception as exc:
+            QMessageBox.critical(self, "Move Failed", str(exc))
+            return
+        self._rebuild_list()
+        QMessageBox.information(self, "Done", f"{moved} cat(s) moved to <b>{room}</b>.")
+
+    def _ms_do_delete(self):
+        """Delete all ms-selected newborns."""
+        cats = list(self._ms_selected)
+        if not cats or self._ctrl is None:
+            return
+        kills_now   = getattr(self._ctrl, "newborn_kill_count", 0)
+        next_reward = 10 - (kills_now % 10)
+        reply = QMessageBox.question(
+            self, "🗑 Delete Newborns",
+            f"<b>Permanently delete {len(cats)} newborn(s)?</b><br><br>"
+            f"This cannot be undone.<br>"
+            f"Kill counter: <b>{kills_now}</b> — "
+            f"next 🪙 25 gold in <b>{next_reward}</b> more kill(s).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            n_deleted, total_gold = self._ctrl.apply_delete_cats_multiple(cats)
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Failed", str(exc))
+            return
+        self._ms_selected.clear()
+        self._rebuild_list()
+        self._detail.clear()
+        self._refresh_kill_counter()
+        msg = f"<b>{n_deleted}</b> newborn(s) deleted."
+        if total_gold:
+            msg += f"<br>🪙 <b>+{total_gold} gold</b> rewarded!"
+        QMessageBox.information(self, "Done", msg)
+
+    def _refresh_kill_counter(self):
+        """Update the kill counter label in the sub-filter bar."""
+        if self._ctrl is None:
+            self._kill_count_lbl.setText("")
+            return
+        kills = getattr(self._ctrl, "newborn_kill_count", 0)
+        remaining = 10 - (kills % 10)
+        if kills == 0:
+            self._kill_count_lbl.setText("")
+        elif remaining == 10:
+            self._kill_count_lbl.setText(f"💀 {kills} killed  🪙 +25 gold just awarded!")
+        else:
+            self._kill_count_lbl.setText(f"💀 {kills} killed  ({remaining} until 🪙 +25g)")
 
     def _on_receive_cats(self):
         """Receive pending cat gifts from the partner and add them to the cat bank."""

@@ -171,6 +171,19 @@ def save_new_cat(sav_path: str, blob: bytes) -> int:
     return new_key
 
 
+
+def save_newborn_kills(path: str, count: int) -> None:
+    """Persist the cumulative newborn-kill counter to the ``custom`` table."""
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE IF NOT EXISTS custom (key TEXT PRIMARY KEY, data TEXT)")
+    conn.execute(
+        "INSERT OR REPLACE INTO custom (key, data) VALUES ('newborn_kills', ?)",
+        (str(int(count)),),
+    )
+    conn.commit()
+    conn.close()
+
+
 _BANK_FOLDERS_KEY = "bank_folders_v1"
 
 def save_bank_folders(sav_path: str, data: dict):
