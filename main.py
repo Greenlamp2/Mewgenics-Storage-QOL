@@ -3,9 +3,7 @@ import sys
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
-from parse.cat import Cat
 from ui.main_window import MainWindow
-from utils.loaders import load_house_infos, load_adventure_keys, load_cats, load_pedigree, load_current_day
 from utils.paths import resource_path
 from utils.save_manager import TARGET_PATH
 from utils.versions import is_app_up_most_to_date

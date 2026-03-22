@@ -834,6 +834,17 @@ class MainWindow(QMainWindow):
         shop_btn.clicked.connect(self._open_token_shop)
         bar.addWidget(shop_btn)
 
+        cat_manager_btn = QToolButton()
+        cat_manager_btn.setText("🐱 Cat Manager")
+        cat_manager_btn.setStyleSheet(
+            "QToolButton { font-size: 13px; font-weight: bold; padding: 2px 10px;"
+            " border: 1px solid #80c8e0; border-radius: 4px; background: #dff3fb; color: #1a5a70; }"
+            "QToolButton:hover { background: #c8ecf8; }"
+            "QToolButton:pressed { background: #b0e0f0; }"
+        )
+        cat_manager_btn.clicked.connect(self._open_cat_manager)
+        bar.addWidget(cat_manager_btn)
+
         self.receive_gift_btn = QToolButton()
         self.receive_gift_btn.setText("📬 Receive Gift")
         self.receive_gift_btn.setStyleSheet(
@@ -1008,6 +1019,20 @@ class MainWindow(QMainWindow):
         self._poll_timer.start()         # resume external-change detection
 
     # ------------------------------------------------------------------
+    # Cat Manager
+    # ------------------------------------------------------------------
+
+    def _open_cat_manager(self):
+        from ui.cat_manager import CatManagerWindow
+        if not hasattr(self, "_cat_manager_win") or self._cat_manager_win is None:
+            self._cat_manager_win = CatManagerWindow(self.ctrl.cats, parent=None)
+            self._cat_manager_win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            self._cat_manager_win.destroyed.connect(lambda: setattr(self, "_cat_manager_win", None))
+        self._cat_manager_win.show()
+        self._cat_manager_win.raise_()
+        self._cat_manager_win.activateWindow()
+
+    # ------------------------------------------------------------------
     # Save-change guard (UI dialog only)
     # ------------------------------------------------------------------
 
@@ -1068,6 +1093,9 @@ class MainWindow(QMainWindow):
             self._populate(self.ctrl.inv_items[current_tab])
         if show_overlay:
             self._show_overlay()
+        # Keep Cat Manager in sync if it is open
+        if hasattr(self, "_cat_manager_win") and self._cat_manager_win is not None:
+            self._cat_manager_win.refresh(self.ctrl.cats)
 
     def _hide_all_action_btns(self):
         self.sacrifice_btn.setVisible(False)
