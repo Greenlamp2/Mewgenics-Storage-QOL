@@ -132,6 +132,45 @@ def _ability_list(
 
 
 # ------------------------------------------------------------------
+# Room header (shown above each room group in the list)
+# ------------------------------------------------------------------
+
+class _RoomHeader(QWidget):
+    """Sticky section header showing a room name and a 'Select all' toggle."""
+    select_all_clicked = Signal(str)   # emits room_name
+
+    def __init__(self, room_name: str, count: int, all_selected: bool = False, parent=None):
+        super().__init__(parent)
+        self._room_name = room_name
+        self.setStyleSheet(
+            "QWidget { background: #1e1e1e; border-radius: 4px; border: 1px solid #2a2a2a; }"
+        )
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 4, 8, 4)
+        lay.setSpacing(6)
+
+        lbl = QLabel(f"🏠  {room_name}  ({count})")
+        lbl.setStyleSheet(
+            "color: #777; font-size: 11px; font-weight: bold;"
+            " background: transparent; border: none;"
+        )
+        lay.addWidget(lbl, 1)
+
+        self._sel_btn = QPushButton("Deselect all" if all_selected else "Select all")
+        self._sel_btn.setStyleSheet(
+            "QPushButton { font-size: 10px; padding: 2px 8px; border: 1px solid #555;"
+            " border-radius: 3px; background: transparent; color: #777; }"
+            "QPushButton:hover { background: #2a2a3a; color: #aaaaff; border-color: #7777ee; }"
+        )
+        self._sel_btn.clicked.connect(lambda: self.select_all_clicked.emit(self._room_name))
+        lay.addWidget(self._sel_btn)
+
+    def set_all_selected(self, v: bool):
+        self._sel_btn.setText("Deselect all" if v else "Select all")
+
+
+# ------------------------------------------------------------------
 # Cat list card
 # ------------------------------------------------------------------
 
@@ -844,16 +883,34 @@ class CatManagerWindow(QWidget):
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet("color: #555; font-size: 13px; padding: 30px;")
             self._list_layout.addWidget(empty)
+            self._refresh_ms_bar()
             return
 
-        for cat in sorted(cats, key=lambda c: (c.name or "").lower()):
+        def _add_card(cat):
             card = _CatCard(cat)
             card.selected.connect(self._on_cat_selected)
             card.ms_toggled.connect(self._on_card_ms_toggled)
-            # Restore ms-selected visual state if this cat is still in the set
             if cat in self._ms_selected:
                 card.set_ms_selected(True)
             self._list_layout.addWidget(card)
+
+        if self._filter in ("house", "bank"):
+            # Group by room, rooms sorted alphabetically; cats within each room also sorted
+            rooms: dict[str, list] = {}
+            for cat in sorted(cats, key=lambda c: ((c.room or "").lower(), (c.name or "").lower())):
+                key = cat.room or "(No room)"
+                rooms.setdefault(key, []).append(cat)
+
+            for room_name, room_cats in rooms.items():
+                all_sel = all(c in self._ms_selected for c in room_cats)
+                header = _RoomHeader(room_name, len(room_cats), all_selected=all_sel)
+                header.select_all_clicked.connect(self._on_select_room)
+                self._list_layout.addWidget(header)
+                for cat in room_cats:
+                    _add_card(cat)
+        else:
+            for cat in sorted(cats, key=lambda c: (c.name or "").lower()):
+                _add_card(cat)
 
         self._list_layout.addStretch()
         self._refresh_ms_bar()
@@ -894,6 +951,7 @@ class CatManagerWindow(QWidget):
                     card.set_ms_selected(is_selected)
                     break
 
+        # Refresh action bar + room header states
         self._refresh_ms_bar()
 
     def _clear_ms_selection(self):
@@ -910,18 +968,70 @@ class CatManagerWindow(QWidget):
         n = len(self._ms_selected)
         if n == 0:
             self._ms_bar.hide()
+        else:
+            self._ms_count_lbl.setText(
+                f"{n} cat{'s' if n > 1 else ''} selected  —  Ctrl+click to add/remove"
+            )
+            is_house = self._filter == "house"
+            is_bank  = self._filter == "bank"
+            self._ms_bank_btn.setVisible(is_house)
+            self._ms_unbank_btn.setVisible(is_bank)
+            self._ms_gift_btn.setVisible(is_house or is_bank)
+            self._ms_bar.show()
+
+        # Refresh "Select all / Deselect all" label on room headers
+        self._refresh_room_header_states()
+
+    def _refresh_room_header_states(self):
+        """Update each room header's button label to reflect current ms-selection state."""
+        # Collect cats per room from current layout (already computed during _rebuild_list)
+        room_cats: dict[str, list] = {}
+        current_room: str | None = None
+        for i in range(self._list_layout.count()):
+            widget = self._list_layout.itemAt(i).widget()
+            if isinstance(widget, _RoomHeader):
+                current_room = widget._room_name
+                room_cats[current_room] = []
+            elif isinstance(widget, _CatCard) and current_room is not None:
+                room_cats[current_room].append(widget._cat)
+
+        for i in range(self._list_layout.count()):
+            widget = self._list_layout.itemAt(i).widget()
+            if isinstance(widget, _RoomHeader):
+                rname = widget._room_name
+                cats_in_room = room_cats.get(rname, [])
+                all_sel = bool(cats_in_room) and all(c in self._ms_selected for c in cats_in_room)
+                widget.set_all_selected(all_sel)
+
+    def _on_select_room(self, room_name: str):
+        """Toggle selection for all cats in *room_name* (select all / deselect all)."""
+        cats_in_room = [
+            c for c in self._filtered_cats()
+            if (c.room or "(No room)") == room_name
+        ]
+        if not cats_in_room:
             return
 
-        self._ms_count_lbl.setText(f"{n} cat{'s' if n > 1 else ''} selected  —  Ctrl+click to add/remove")
+        all_already_selected = all(c in self._ms_selected for c in cats_in_room)
 
-        # Show buttons relevant to the current filter
-        is_house = self._filter == "house"
-        is_bank  = self._filter == "bank"
-        self._ms_bank_btn.setVisible(is_house)
-        self._ms_unbank_btn.setVisible(is_bank)
-        self._ms_gift_btn.setVisible(is_house or is_bank)
+        if all_already_selected:
+            # Deselect all in this room
+            for cat in cats_in_room:
+                self._ms_selected.discard(cat)
+        else:
+            # Select all in this room
+            for cat in cats_in_room:
+                self._ms_selected.add(cat)
 
-        self._ms_bar.show()
+        # Update card visuals
+        for i in range(self._list_layout.count()):
+            item = self._list_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), _CatCard):
+                card = item.widget()
+                if (card._cat.room or "(No room)") == room_name:
+                    card.set_ms_selected(card._cat in self._ms_selected)
+
+        self._refresh_ms_bar()
 
     def _ms_do_bank(self):
         """Bank all currently ms-selected In-House cats."""
