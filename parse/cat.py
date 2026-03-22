@@ -86,6 +86,7 @@ class Cat:
         # are anchored to the byte immediately after this string.
         self.name_tag = r.str() or ""
         personality_anchor = r.pos
+        self._personality_anchor = personality_anchor  # kept for serializer
 
         # Possible parent UIDs — fixed-position attempt.
         # parse_save will run a blob scan as a fallback if these don't resolve.
@@ -97,6 +98,7 @@ class Cat:
 
         r.skip(64)
         T = [r.u32() for _ in range(72)]
+        self._T = T  # kept for serializer / verification
         self.body_parts = {"texture": T[0], "bodyShape": T[3], "headShape": T[8]}
         self.visual_mutation_slots = {
             slot_key: T[table_index]
@@ -129,8 +131,11 @@ class Cat:
             self.gender_source = "token_fallback"
         r.f64()
 
+        self._pos_stat_base = r.pos
         self.stat_base = [r.u32() for _ in range(7)]
+        self._pos_stat_mod = r.pos
         self.stat_mod  = [r.i32() for _ in range(7)]
+        self._pos_stat_sec = r.pos
         self.stat_sec  = [r.i32() for _ in range(7)]
 
         self.base_stats  = {n: self.stat_base[i] for i, n in enumerate(STAT_NAMES)}
@@ -316,3 +321,138 @@ class Cat:
 
     def parse(self, path):
         pass
+
+    # ── Serialization ────────────────────────────────────────────────────────
+
+    def to_raw(self) -> bytes:
+        """Return the decompressed cat blob with patchable numeric fields written back.
+
+        Safe to modify before calling to_raw():
+            stat_base  — list[int]   7 × u32
+            stat_mod   — list[int]   7 × i32
+            stat_sec   — list[int]   7 × i32
+            libido     — float|None  f64 at personality_anchor + 32
+            inbredness — float|None  f64 at personality_anchor + 40
+            aggression — float|None  f64 at personality_anchor + 64
+
+        String fields (name, collar, name_tag) are fixed-length in the blob;
+        changing them would shift every subsequent byte offset and is not supported.
+        """
+        buf = bytearray(self._raw)
+        anchor = self._personality_anchor
+
+        # Patch stat arrays
+        pos = self._pos_stat_base
+        for v in self.stat_base:
+            struct.pack_into('<I', buf, pos, max(0, int(v)))
+            pos += 4
+
+        pos = self._pos_stat_mod
+        for v in self.stat_mod:
+            struct.pack_into('<i', buf, pos, int(v))
+            pos += 4
+
+        pos = self._pos_stat_sec
+        for v in self.stat_sec:
+            struct.pack_into('<i', buf, pos, int(v))
+            pos += 4
+
+        # Patch personality floats (embedded in the 64-byte reserved region)
+        if self.libido is not None and anchor + 40 <= len(buf):
+            struct.pack_into('<d', buf, anchor + 32, float(self.libido))
+        if self.inbredness is not None and anchor + 48 <= len(buf):
+            struct.pack_into('<d', buf, anchor + 40, float(self.inbredness))
+        if self.aggression is not None and anchor + 72 <= len(buf):
+            struct.pack_into('<d', buf, anchor + 64, float(self.aggression))
+
+        return bytes(buf)
+
+    def to_blob(self) -> bytes:
+        """Return a saveable LZ4-compressed blob for the 'cats' SQLite table.
+
+        Format: [u32 LE uncompressed_size] + [LZ4 block-compressed payload]
+
+        Usage:
+            blob = cat.to_blob()
+            conn.execute("UPDATE cats SET data=? WHERE key=?", (blob, cat.db_key))
+        """
+        raw = self.to_raw()
+        compressed = lz4.block.compress(raw, store_size=False)
+        return struct.pack('<I', len(raw)) + compressed
+
+    @classmethod
+    def verify_roundtrip(
+        cls,
+        blob: bytes,
+        cat_key: int,
+        house_info: dict | None = None,
+        adventure_keys: set | None = None,
+        current_day=None,
+    ) -> tuple[bool, list[str]]:
+        """Parse *blob* → Cat → to_blob() → re-parse → compare all fields.
+
+        Returns ``(ok, mismatches)`` where *ok* is True when the round-trip
+        is fully lossless (raw bytes identical, every parsed field equal).
+
+        Example::
+
+            ok, issues = Cat.verify_roundtrip(blob, cat_key)
+            if not ok:
+                for line in issues:
+                    print("  MISMATCH:", line)
+        """
+        if house_info is None:
+            house_info = {}
+        if adventure_keys is None:
+            adventure_keys = set()
+
+        cat1 = cls(blob, cat_key, house_info, adventure_keys, current_day)
+        new_blob = cat1.to_blob()
+        cat2 = cls(new_blob, cat_key, house_info, adventure_keys, current_day)
+
+        mismatches: list[str] = []
+
+        def check(name: str, v1, v2, tol: float | None = None) -> None:
+            if tol is not None:
+                if v1 is None and v2 is None:
+                    return
+                if v1 is None or v2 is None or abs(v1 - v2) > tol:
+                    mismatches.append(f"{name}: {v1!r} → {v2!r}")
+            elif v1 != v2:
+                mismatches.append(f"{name}: {v1!r} → {v2!r}")
+
+        check("breed_id",            cat1.breed_id,            cat2.breed_id)
+        check("unique_id",           cat1._uid_int,            cat2._uid_int)
+        check("name",                cat1.name,                cat2.name)
+        check("name_tag",            cat1.name_tag,            cat2.name_tag)
+        check("collar",              cat1.collar,              cat2.collar)
+        check("_parent_uid_a",       cat1._parent_uid_a,       cat2._parent_uid_a)
+        check("_parent_uid_b",       cat1._parent_uid_b,       cat2._parent_uid_b)
+        check("T[72]",               cat1._T,                  cat2._T)
+        check("gender_token_fields", cat1.gender_token_fields, cat2.gender_token_fields)
+        check("gender_token",        cat1.gender_token,        cat2.gender_token)
+        check("stat_base",           cat1.stat_base,           cat2.stat_base)
+        check("stat_mod",            cat1.stat_mod,            cat2.stat_mod)
+        check("stat_sec",            cat1.stat_sec,            cat2.stat_sec)
+        check("libido",              cat1.libido,              cat2.libido,      tol=1e-12)
+        check("inbredness",          cat1.inbredness,          cat2.inbredness,  tol=1e-12)
+        check("aggression",          cat1.aggression,          cat2.aggression,  tol=1e-12)
+        check("abilities",           cat1.abilities,           cat2.abilities)
+        check("passive_abilities",   cat1.passive_abilities,   cat2.passive_abilities)
+        check("disorders",           cat1.disorders,           cat2.disorders)
+        check("mutations",           cat1.mutations,           cat2.mutations)
+        check("defects",             cat1.defects,             cat2.defects)
+
+        # Strictest test: raw decompressed bytes must be bit-for-bit identical
+        raw1, raw2 = cat1._raw, cat2._raw
+        if raw1 != raw2:
+            diff_pos = [i for i, (a, b) in enumerate(zip(raw1, raw2)) if a != b]
+            length_note = (
+                f", length {len(raw1)} vs {len(raw2)}" if len(raw1) != len(raw2) else ""
+            )
+            mismatches.append(
+                f"raw bytes: {len(diff_pos)} byte(s) differ"
+                f" (first 10 offsets: {diff_pos[:10]}){length_note}"
+            )
+
+        return len(mismatches) == 0, mismatches
