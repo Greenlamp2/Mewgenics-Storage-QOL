@@ -15,8 +15,8 @@ from catalogs.ability_catalog import _ABILITY_LOOKUP
 
 _GENDER_SYMBOL = {"male": "♂", "female": "♀", "?": "⚥"}
 _GENDER_COLOR  = {"male": "#5b9cf6", "female": "#f47abf", "?": "#aaaaaa"}
-_STATUS_COLOR  = {"In House": "#4caf50", "Adventure": "#ff9800", "Gone": "#666666"}
-_STATUS_ICON   = {"In House": "🏠", "Adventure": "⚔️", "Gone": "💨"}
+_STATUS_COLOR  = {"In House": "#4caf50", "Adventure": "#ff9800", "Gone": "#666666", "In Bank": "#7b68ee"}
+_STATUS_ICON   = {"In House": "🏠", "Adventure": "⚔️", "Gone": "💨", "In Bank": "🏦"}
 
 STAT_DISPLAY_COLORS = {
     "STR": "#e05050", "DEX": "#50c050", "CON": "#6090e0",
@@ -213,6 +213,8 @@ class _CatDetail(QScrollArea):
 
     # Emitted after a successful rename so the list can be refreshed
     renamed = Signal(object)   # emits Cat
+    # Emitted after a successful bank / unbank action so the list can be rebuilt
+    banked  = Signal(object)   # emits Cat
 
     def __init__(self, ctrl=None, parent=None):
         super().__init__(parent)
@@ -278,6 +280,32 @@ class _CatDetail(QScrollArea):
             )
             rename_btn.clicked.connect(lambda: self._do_rename(cat))
             name_row.addWidget(rename_btn)
+
+            # ── Bank / unbank button ─────────────────────────────────
+            if cat.status == "In House":
+                bank_btn = QPushButton("🏦")
+                bank_btn.setFixedSize(28, 28)
+                bank_btn.setToolTip("Send cat to the cat bank (removes it from the house)")
+                bank_btn.setStyleSheet(
+                    "QPushButton { background: #1a1a3a; border: 1px solid #5555aa; border-radius: 4px;"
+                    " color: #8888dd; font-size: 13px; padding: 0; }"
+                    "QPushButton:hover { background: #252550; color: #aaaaff; border-color: #7777cc; }"
+                    "QPushButton:pressed { background: #303060; }"
+                )
+                bank_btn.clicked.connect(lambda: self._do_bank(cat))
+                name_row.addWidget(bank_btn)
+            elif cat.status == "In Bank":
+                unbank_btn = QPushButton("🏠")
+                unbank_btn.setFixedSize(28, 28)
+                unbank_btn.setToolTip("Move cat back to the house")
+                unbank_btn.setStyleSheet(
+                    "QPushButton { background: #1a2a1a; border: 1px solid #4caf50; border-radius: 4px;"
+                    " color: #4caf50; font-size: 13px; padding: 0; }"
+                    "QPushButton:hover { background: #1e361e; color: #66cc66; border-color: #66cc66; }"
+                    "QPushButton:pressed { background: #244024; }"
+                )
+                unbank_btn.clicked.connect(lambda: self._do_unbank(cat))
+                name_row.addWidget(unbank_btn)
 
         name_row_w = QWidget()
         name_row_w.setStyleSheet("background: transparent;")
@@ -461,6 +489,43 @@ class _CatDetail(QScrollArea):
         # Signal the list to update the card label
         self.renamed.emit(cat)
 
+    def _do_bank(self, cat) -> None:
+        """Send *cat* to the cat bank."""
+        reply = QMessageBox.question(
+            self,
+            "Send to Cat Bank",
+            f"Send <b>{cat.name}</b> to the cat bank?<br><br>"
+            "The cat will be removed from the house until you move it back.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._ctrl.apply_bank_cat(cat)
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", f"Could not bank cat:\n{exc}")
+            return
+        self.show_cat(cat)
+        self.banked.emit(cat)
+
+    def _do_unbank(self, cat) -> None:
+        """Move *cat* from the cat bank back to the house."""
+        reply = QMessageBox.question(
+            self,
+            "Move to House",
+            f"Move <b>{cat.name}</b> back to the house?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._ctrl.apply_unbank_cat(cat)
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", f"Could not unbank cat:\n{exc}")
+            return
+        self.show_cat(cat)
+        self.banked.emit(cat)
+
     # ── builders ─────────────────────────────────────────────────────
 
     @staticmethod
@@ -551,8 +616,8 @@ class CatManagerWindow(QWidget):
         self._filter_btn_active_style = _btn_style_active
         self._filter_btn_normal_style = _btn_style
 
-        # Only "In House" and "Adventure" — no "All"
-        for key, label in [("house", "🏠 In House"), ("adventure", "⚔️ Adventure")]:
+        # Only "In House", "Adventure" and "In Bank" — no "All"
+        for key, label in [("house", "🏠 In House"), ("adventure", "⚔️ Adventure"), ("bank", "🏦 In Bank")]:
             btn = QPushButton(label)
             btn.setStyleSheet(_btn_style_active if key == self._filter else _btn_style)
             btn.clicked.connect(lambda _=False, k=key: self._set_filter(k))
@@ -582,6 +647,7 @@ class CatManagerWindow(QWidget):
 
         self._detail = _CatDetail(ctrl=ctrl)
         self._detail.renamed.connect(self._on_cat_renamed)
+        self._detail.banked.connect(self._on_cat_banked)
 
         left_frame = QWidget()
         lf_lay = QVBoxLayout(left_frame)
@@ -618,6 +684,8 @@ class CatManagerWindow(QWidget):
             return [c for c in self._cats if c.status == "In House"]
         if self._filter == "adventure":
             return [c for c in self._cats if c.status == "Adventure"]
+        if self._filter == "bank":
+            return [c for c in self._cats if c.status == "In Bank"]
         return list(self._cats)
 
     # ── List ─────────────────────────────────────────────────────────
@@ -674,6 +742,11 @@ class CatManagerWindow(QWidget):
         # Re-sort the list now that the name changed
         self._rebuild_list()
         # Re-select the cat in the new sorted order
+        self._reselect_cat(cat)
+
+    def _on_cat_banked(self, cat):
+        """Called after a bank / unbank action: rebuild the list and reselect the cat."""
+        self._rebuild_list()
         self._reselect_cat(cat)
 
     def _reselect_cat(self, cat):

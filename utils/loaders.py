@@ -64,27 +64,92 @@ def load_inventories(path):
     }
 
 def load_house_infos(path):
-    conn = sqlite3.connect(path)
-    data = _fetch_blob(conn, 'house_state')
-    if not data:
-        return {}
+    _, house_info, _ = load_house_state_raw(path)
+    return house_info
+
+
+def load_house_state_raw(path: str) -> tuple:
+    """Parse the house_state blob with full round-trip capability.
+
+    Returns:
+        header_prefix (bytes): first 4 bytes of the blob (unknown header; preserved verbatim)
+        house_info    (dict):  {cat_key (int): room_name (str)}  — passed to Cat.__init__
+        entries       (dict):  {cat_key (int): raw_entry_bytes (bytes)}  — used for banking
+    """
+    empty = (b'\x00\x00\x00\x00', {}, {})
+    if not os.path.exists(path):
+        return empty
+    try:
+        conn = sqlite3.connect(path)
+        data = _fetch_blob(conn, 'house_state')
+        conn.close()
+    except Exception:
+        return empty
+
+    if not data or len(data) < 8:
+        return data[:4] if data and len(data) >= 4 else b'\x00\x00\x00\x00', {}, {}
+
+    header_prefix = data[0:4]
     count = struct.unpack_from('<I', data, 4)[0]
     pos   = 8
-    result = {}
+    house_info: dict = {}
+    entries:    dict = {}
+
     for _ in range(count):
+        entry_start = pos
         if pos + 8 > len(data):
             break
         cat_key  = struct.unpack_from('<I', data, pos)[0]
         pos += 8
+        if pos + 8 > len(data):
+            break
         room_len = struct.unpack_from('<I', data, pos)[0]
         pos += 8
         room_name = ""
         if room_len > 0:
+            if pos + room_len > len(data):
+                break
             room_name = data[pos:pos + room_len].decode('ascii', errors='ignore')
             pos += room_len
-        pos += 24
-        result[cat_key] = room_name
-    return result
+        if pos + 24 > len(data):
+            entry_end = len(data)
+        else:
+            pos += 24
+            entry_end = pos
+        house_info[cat_key] = room_name
+        entries[cat_key]    = bytes(data[entry_start:entry_end])
+
+    return header_prefix, house_info, entries
+
+
+def load_cat_bank(path: str) -> dict:
+    """Load the cat bank from the ``cat_bank`` SQLite table.
+
+    Returns {db_key (int): {'entry_bytes': bytes, 'room_name': str}}.
+    Creates the table automatically if it does not exist.
+    """
+    if not os.path.exists(path):
+        return {}
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cat_bank "
+            "(key INTEGER PRIMARY KEY, entry_bytes BLOB, room_name TEXT)"
+        )
+        conn.commit()
+        rows = conn.execute(
+            "SELECT key, entry_bytes, room_name FROM cat_bank"
+        ).fetchall()
+        conn.close()
+        return {
+            int(k): {
+                'entry_bytes': bytes(eb) if eb else b'',
+                'room_name':   rn or '',
+            }
+            for k, eb, rn in rows
+        }
+    except Exception:
+        return {}
 
 def load_adventure_keys(path):
     conn = sqlite3.connect(path)

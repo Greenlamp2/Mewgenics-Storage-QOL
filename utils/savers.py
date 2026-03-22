@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import struct
 
 from utils.save_manager import ITEMS_POOL_PATH
 from utils.writers import BinaryWriter
@@ -167,4 +168,52 @@ def save_bank_folders(sav_path: str, data: dict):
     )
     conn.commit()
     conn.close()
+
+
+def save_house_state(path: str, header_prefix: bytes, entries: dict) -> None:
+    """Write the house_state blob back to the save file.
+
+    Parameters
+    ----------
+    header_prefix : bytes
+        The first 4 bytes of the original blob (unknown header; preserved verbatim).
+    entries : dict
+        {cat_key (int): raw_entry_bytes (bytes)} — only cats that should remain
+        in the house.  Cats omitted here will no longer be tracked by the game
+        as being in the house.
+    """
+    count = len(entries)
+    blob  = (
+        header_prefix[:4]
+        + struct.pack('<I', count)
+        + b''.join(entries.values())
+    )
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE files SET data=? WHERE key='house_state'", (blob,))
+    conn.commit()
+    conn.close()
+
+
+def save_cat_bank(path: str, cat_bank: dict) -> None:
+    """Persist the cat bank to the ``cat_bank`` SQLite table.
+
+    Parameters
+    ----------
+    cat_bank : dict
+        {db_key (int): {'entry_bytes': bytes, 'room_name': str}}
+    """
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS cat_bank "
+        "(key INTEGER PRIMARY KEY, entry_bytes BLOB, room_name TEXT)"
+    )
+    conn.execute("DELETE FROM cat_bank")
+    for db_key, data in cat_bank.items():
+        conn.execute(
+            "INSERT INTO cat_bank (key, entry_bytes, room_name) VALUES (?, ?, ?)",
+            (int(db_key), data['entry_bytes'], data.get('room_name', '')),
+        )
+    conn.commit()
+    conn.close()
+
 

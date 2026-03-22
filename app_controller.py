@@ -11,10 +11,11 @@ from parse.cat import Cat
 from parse.item import Item, GhostItem
 from catalogs.itemcatalog import item_catalog
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, \
-    load_save_properties, load_cats_count, load_bank_inventory, load_bank_folders, SAVE_INFO_KEYS, load_house_infos, \
-    load_adventure_keys, load_cats, load_pedigree, load_current_day
+    load_save_properties, load_cats_count, load_bank_inventory, load_bank_folders, SAVE_INFO_KEYS, \
+    load_house_state_raw, load_adventure_keys, load_cats, load_pedigree, \
+    load_current_day, load_cat_bank
 from utils.savers import save_inventories as _save_inventories, save_tokens, \
-    save_bank_inventory, save_items_pool, save_bank_folders
+    save_bank_inventory, save_items_pool, save_bank_folders, save_house_state, save_cat_bank
 
 # Rarities that should never appear in any view
 EXCLUDED_RARITIES = {"sidequest", "quest"}
@@ -43,6 +44,11 @@ class AppController:
         self.save_properties: dict[str, str] = {}
         self.bank_folders: dict = {"folders": [], "item_folders": {}}
         self.cats: list = []
+        # Cat bank (maps db_key → {'entry_bytes': bytes, 'room_name': str})
+        self.cat_bank: dict = {}
+        # house_state round-trip helpers (set by load_data / apply_bank_cat / apply_unbank_cat)
+        self._house_state_prefix:  bytes = b'\x00\x00\x00\x00'
+        self._house_state_entries: dict  = {}  # {cat_key: raw_entry_bytes} currently in house_state
 
     # ------------------------------------------------------------------
     # Data loading
@@ -96,9 +102,16 @@ class AppController:
             "Bank":    self.inventories["bank"].items,
             "Pool":    self.pool_items + self.undiscovered_pool_items,
         }
-        house = load_house_infos(self.sav_path)
         adv = load_adventure_keys(self.sav_path)
         raw_cats = load_cats(self.sav_path)
+
+        # Load house_state once for both Cat init (house_info) and round-trip (entries)
+        hs_prefix, house, hs_entries = load_house_state_raw(self.sav_path)
+        self._house_state_prefix  = hs_prefix
+        self._house_state_entries = hs_entries
+
+        # Load cat bank
+        self.cat_bank = load_cat_bank(self.sav_path)
         ped_map = load_pedigree(self.sav_path)
         current_day = load_current_day(self.sav_path)
 
@@ -176,6 +189,12 @@ class AppController:
             if c.generation < 0:
                 c.generation = 0
 
+        # Mark cats that are in the cat bank (they were removed from house_state when banked)
+        for cat in cats:
+            if cat.db_key in self.cat_bank:
+                cat.status = "In Bank"
+                cat.room   = self.cat_bank[cat.db_key].get('room_name', '')
+
         self.cats = cats
 
 
@@ -201,6 +220,85 @@ class AppController:
         from utils.savers import save_cat
         cat.rename_in_blob(new_name)
         save_cat(self.sav_path, cat)
+        self._refresh_mtime()
+
+    # ------------------------------------------------------------------
+    # Cat bank — move cats between the house and the cat bank
+    # ------------------------------------------------------------------
+
+    def apply_bank_cat(self, cat) -> None:
+        """Remove *cat* from the house and place it in the cat bank.
+
+        The cat's raw house_state entry bytes are preserved so that
+        ``apply_unbank_cat`` can restore it exactly to the same room.
+        Only cats with status ``"In House"`` can be banked.
+        """
+        if cat.status != "In House":
+            raise ValueError(
+                f"Only cats that are 'In House' can be banked "
+                f"('{cat.name}' is currently '{cat.status}')."
+            )
+
+        entry_bytes = self._house_state_entries.get(cat.db_key)
+        if entry_bytes is None:
+            raise ValueError(
+                f"Could not find '{cat.name}' in house_state — "
+                f"the save file may have been modified externally."
+            )
+
+        # Store in cat bank
+        self.cat_bank[cat.db_key] = {
+            'entry_bytes': entry_bytes,
+            'room_name':   cat.room,
+        }
+        # Remove from active house_state entries
+        self._house_state_entries.pop(cat.db_key, None)
+
+        # Persist both
+        save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+        save_cat_bank(self.sav_path, self.cat_bank)
+
+        # Update in-memory cat
+        cat.status = "In Bank"
+        cat.room   = self.cat_bank[cat.db_key]['room_name']
+
+        self._refresh_mtime()
+
+    def apply_unbank_cat(self, cat) -> None:
+        """Return *cat* from the cat bank back to the house.
+
+        Restores its original house_state entry bytes verbatim so it
+        appears in the same room it occupied before banking.
+        Only cats with status ``"In Bank"`` can be unbanked.
+        """
+        if cat.status != "In Bank":
+            raise ValueError(
+                f"Only banked cats can be moved back to the house "
+                f"('{cat.name}' is currently '{cat.status}')."
+            )
+        if cat.db_key not in self.cat_bank:
+            raise ValueError(
+                f"Cat '{cat.name}' (key={cat.db_key}) not found in cat bank data."
+            )
+
+        bank_entry = self.cat_bank[cat.db_key]
+        entry_bytes = bank_entry['entry_bytes']
+        room_name   = bank_entry['room_name']
+
+        # Restore to active house_state entries
+        self._house_state_entries[cat.db_key] = entry_bytes
+
+        # Remove from cat bank
+        del self.cat_bank[cat.db_key]
+
+        # Persist both
+        save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+        save_cat_bank(self.sav_path, self.cat_bank)
+
+        # Update in-memory cat
+        cat.status = "In House"
+        cat.room   = room_name
+
         self._refresh_mtime()
 
     def _refresh_mtime(self):
