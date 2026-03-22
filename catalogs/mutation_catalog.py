@@ -1,4 +1,24 @@
+import json
+import os
+import re
+import struct
+import sys
+from pathlib import Path
+
 from catalogs.visual_mutation_catalog import load_visual_mutation_names
+
+
+_STAT_LABELS = {
+    "str": "STR",
+    "con": "CON",
+    "int": "INT",
+    "dex": "DEX",
+    "spd": "SPD",
+    "lck": "LCK",
+    "cha": "CHA",
+    "shield": "Shield",
+    "divine_shield": "Holy Shield",
+}
 
 _VISUAL_MUTATION_FIELDS = [
     ("fur", 0, "fur", "texture", "fur", "Fur"),
@@ -31,8 +51,326 @@ _VISUAL_MUTATION_PART_LABELS = {
     "mouth": "Mouth",
 }
 
+def _bundle_dir() -> str:
+    """Return the directory containing bundled app resources."""
+    if getattr(sys, "frozen", False):
+        return getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+def _app_dir() -> str:
+    """Return the directory containing the running script or built executable."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+def _steam_library_paths() -> list[str]:
+    candidates = [
+        os.path.join(
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            "Steam",
+            "steamapps",
+            "libraryfolders.vdf",
+        ),
+        os.path.join(
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            "Steam",
+            "steamapps",
+            "libraryfolders.vdf",
+        ),
+    ]
+    libraries: list[str] = []
+    for vdf_path in candidates:
+        if not os.path.exists(vdf_path):
+            continue
+        try:
+            with open(vdf_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            for match in re.finditer(r'"path"\s+"([^"]+)"', content):
+                path = match.group(1).replace("\\\\", "\\")
+                if path not in libraries:
+                    libraries.append(path)
+        except Exception:
+            continue
+    return libraries
+
+APPDATA_CONFIG_DIR = os.path.join(
+    os.environ.get("APPDATA", str(Path.home())),
+    "MewgenicsBreedingManager",
+)
+APP_CONFIG_PATH = os.path.join(APPDATA_CONFIG_DIR, "settings.json")
+
+def _load_app_config() -> dict:
+    if not os.path.exists(APP_CONFIG_PATH):
+        return {}
+    try:
+        with open(APP_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def _saved_gpak_path() -> str:
+    data = _load_app_config()
+    value = data.get("gpak_path", "")
+    return value.strip() if isinstance(value, str) else ""
+
+def _candidate_gpak_paths() -> list[str]:
+    candidates: list[str] = []
+
+    env_path = os.environ.get("MEWGENICS_GPAK_PATH", "").strip()
+    if env_path:
+        candidates.append(env_path)
+
+    direct_paths = [
+        os.path.join(
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            "Steam", "steamapps", "common", "Mewgenics", "resources.gpak",
+        ),
+        os.path.join(
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            "Steam", "steamapps", "common", "Mewgenics", "resources.gpak",
+        ),
+        r"D:\Games\Mewgenics\resources.gpak",
+        os.path.join(os.getcwd(), "resources.gpak"),
+        os.path.join(_app_dir(), "resources.gpak"),
+        os.path.join(_bundle_dir(), "resources.gpak"),
+        "/mnt/c/Program Files (x86)/Steam/steamapps/common/Mewgenics/resources.gpak",
+        "/mnt/c/Program Files/Steam/steamapps/common/Mewgenics/resources.gpak",
+    ]
+    candidates.extend(direct_paths)
+
+    for library in _steam_library_paths():
+        candidates.append(os.path.join(library, "steamapps", "common", "Mewgenics", "resources.gpak"))
+
+    saved_path = _saved_gpak_path()
+    if saved_path:
+        candidates.append(saved_path)
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for path in candidates:
+        norm = os.path.normcase(os.path.normpath(path))
+        if norm in seen:
+            continue
+        seen.add(norm)
+        ordered.append(path)
+    return ordered
+
+def _load_gpak_text_strings(file_obj, file_offsets: dict[str, tuple[int, int]]) -> dict[str, str]:
+    import csv as _csv
+    import io as _io
+
+    strings: dict[str, str] = {}
+    for fname, (csv_off, csv_sz) in file_offsets.items():
+        if not (fname.startswith("data/text/") and fname.endswith(".csv")):
+            continue
+        file_obj.seek(csv_off)
+        raw_csv = file_obj.read(csv_sz).decode("utf-8-sig", errors="replace")
+        for row in _csv.reader(_io.StringIO(raw_csv)):
+            if len(row) >= 2 and row[0] and not row[0].startswith("//"):
+                strings[row[0]] = row[1]
+    return strings
+
+def _load_ability_descriptions() -> dict[str, str]:
+    """
+    Build {normalized_ability_id: english_desc} by reading ability/passive GON files
+    and combined.csv from the game's gpak. Returns {} if gpak is unavailable.
+    """
+    if not _GPAK_PATH:
+        return {}
+    try:
+        with open(_GPAK_PATH, "rb") as f:
+            count = struct.unpack("<I", f.read(4))[0]
+            entries = []
+            for _ in range(count):
+                name_len = struct.unpack("<H", f.read(2))[0]
+                name = f.read(name_len).decode("utf-8", errors="replace")
+                size = struct.unpack("<I", f.read(4))[0]
+                entries.append((name, size))
+            dir_end = f.tell()
+
+            file_offsets: dict[str, tuple[int, int]] = {}
+            offset = dir_end
+            for name, size in entries:
+                file_offsets[name] = (offset, size)
+                offset += size
+
+            game_strings = _load_gpak_text_strings(f, file_offsets)
+
+            block_re = re.compile(r'^([A-Za-z]\w*)\s*\{', re.MULTILINE)
+            desc_re = re.compile(r'^\s*desc\s+"([^"]*)"', re.MULTILINE)
+
+            def _clean(text: str) -> str:
+                text = re.sub(r'\[img:[^\]]+\]', '', text)
+                text = re.sub(r'\[s:[^\]]*\]|\[/s\]', '', text)
+                text = re.sub(r'\[c:[^\]]*\]|\[/c\]', '', text)
+                return re.sub(r'\s+', ' ', text).strip()
+
+            result: dict[str, str] = {}
+            for fname, (foff, fsz) in file_offsets.items():
+                if not (
+                    (fname.startswith("data/abilities/") or fname.startswith("data/passives/"))
+                    and fname.endswith(".gon")
+                ):
+                    continue
+                f.seek(foff)
+                content = f.read(fsz).decode("utf-8", errors="replace")
+                for bm in block_re.finditer(content):
+                    ability_id = bm.group(1)
+                    block_start = bm.end()
+                    depth, idx = 1, block_start
+                    while idx < len(content) and depth > 0:
+                        if content[idx] == '{':
+                            depth += 1
+                        elif content[idx] == '}':
+                            depth -= 1
+                        idx += 1
+                    block = content[block_start:idx - 1]
+                    dm = desc_re.search(block)
+                    if not dm:
+                        continue
+                    desc_val = dm.group(1)
+                    desc_val = _resolve_game_string(desc_val, game_strings)
+                    if not desc_val or desc_val == "nothing":
+                        continue
+                    result[ability_id.lower()] = _clean(desc_val)
+        return result
+    except Exception:
+        return {}
+
+def _resolve_game_string(value: str, game_strings: dict[str, str]) -> str:
+    resolved = value
+    seen: set[str] = set()
+    while resolved in game_strings and resolved not in seen:
+        seen.add(resolved)
+        nxt = game_strings[resolved].strip()
+        if not nxt:
+            break
+        resolved = nxt
+    return resolved
+
+def _parse_mutation_gon(content: str, game_strings: dict[str, str], category: str) -> dict[int, tuple[str, str]]:
+    """Parse a mutation GON file into {slot_id: (display_name, stat_desc)}.
+
+    Covers normal mutations (300-699), birth defects (700-706, and the
+    special -2 "completely missing part" defect stored as 0xFFFFFFFE in
+    the T table), and special/rare mutations (750+).
+    IDs < 300 are base appearance variants handled separately.
+    """
+    result: dict[int, tuple[str, str]] = {}
+    csv_prefix = f"MUTATION_{category.upper()}_"
+
+    def _extract_block(start_pos: int) -> tuple[str, int]:
+        """Extract the brace-delimited block starting at start_pos (after '{')."""
+        depth, end = 1, start_pos
+        while end < len(content) and depth > 0:
+            if content[end] == '{':
+                depth += 1
+            elif content[end] == '}':
+                depth -= 1
+            end += 1
+        return content[start_pos:end - 1], end
+
+    def _block_to_entry(slot_id: int, block: str):
+        """Parse a single mutation block into (display_name, stat_desc)."""
+        name_match = re.search(r'//\s*(.+)', block)
+        raw_name = name_match.group(1).strip().title() if name_match else f"Mutation {slot_id}"
+        # Trim parenthetical dev comments, e.g., "No Eyes (Frame 703, ...)" → "No Eyes"
+        raw_name = re.sub(r'\s*\(.*', '', raw_name).strip() or raw_name
+        csv_key = f"{csv_prefix}{slot_id}_DESC"
+        if csv_key in game_strings:
+            stat_desc = _resolve_game_string(game_strings[csv_key], game_strings).strip().rstrip(".")
+        else:
+            header = block.split('{')[0]
+            stats: list[str] = []
+            for key, label in _STAT_LABELS.items():
+                stat_match = re.search(rf'(?<!\w){re.escape(key)}\s+(-?\d+)', header)
+                if stat_match:
+                    value = int(stat_match.group(1))
+                    stats.append(f"{'+' if value > 0 else ''}{value} {label}")
+            stat_desc = ", ".join(stats)
+        result[slot_id] = (raw_name, stat_desc)
+
+    # ── Main numeric IDs (300+) ──────────────────────────────────────────
+    # IDs < 300 are base appearance variants, not mutations — skip them.
+    idx = 0
+    while idx < len(content):
+        match = re.search(r'(?<!\w)(\d{3,})\s*\{', content[idx:])
+        if not match:
+            break
+        slot_id = int(match.group(1))
+        block, idx = _extract_block(idx + match.end())
+        if slot_id < 300:
+            continue
+        _block_to_entry(slot_id, block)
+
+    # ── Special -2 entry ("completely missing part" birth defect) ────────
+    # The GON files use `-2 {` for body parts that are entirely absent.
+    # In the save's visual-mutation T table this is stored as the u32
+    # value 0xFFFFFFFE (unsigned representation of -2).
+    m2_match = re.search(r'(?<!\w)-2\s*\{', content)
+    if m2_match:
+        block, _ = _extract_block(m2_match.end())
+        # Try the game-string key "MUTATION_EYES_M2_DESC" etc.
+        csv_key_m2 = f"{csv_prefix}M2_DESC"
+        if csv_key_m2 in game_strings:
+            name_match = re.search(r'//\s*(.+)', block)
+            raw_name = name_match.group(1).strip().title() if name_match else "Missing Part"
+            # Trim parenthetical dev comments from the name
+            raw_name = re.sub(r'\s*\(.*', '', raw_name).strip() or raw_name
+            stat_desc = _resolve_game_string(game_strings[csv_key_m2], game_strings).strip().rstrip(".")
+            result[0xFFFFFFFE] = (raw_name, stat_desc)
+        else:
+            _block_to_entry(0xFFFFFFFE, block)
+
+    return result
+
+
+def _load_visual_mut_data() -> dict[str, dict[int, tuple[str, str]]]:
+    """Load {gon_category: {slot_id: (name, stat_desc)}} from resources.gpak."""
+    if not _GPAK_PATH:
+        return {}
+    try:
+        with open(_GPAK_PATH, "rb") as f:
+            count = struct.unpack("<I", f.read(4))[0]
+            entries = []
+            for _ in range(count):
+                name_len = struct.unpack("<H", f.read(2))[0]
+                name = f.read(name_len).decode("utf-8", errors="replace")
+                size = struct.unpack("<I", f.read(4))[0]
+                entries.append((name, size))
+            dir_end = f.tell()
+
+            file_offsets: dict[str, tuple[int, int]] = {}
+            offset = dir_end
+            for name, size in entries:
+                file_offsets[name] = (offset, size)
+                offset += size
+
+            game_strings = _load_gpak_text_strings(f, file_offsets)
+
+            result: dict[str, dict[int, tuple[str, str]]] = {}
+            for fname, (foff, fsz) in file_offsets.items():
+                if not (fname.startswith("data/mutations/") and fname.endswith(".gon")):
+                    continue
+                category = fname.split("/")[-1].replace(".gon", "")
+                f.seek(foff)
+                content = f.read(fsz).decode("utf-8", errors="replace")
+                result[category] = _parse_mutation_gon(content, game_strings, category)
+        return result
+    except Exception:
+        return {}
+
+def _reload_game_data():
+    global _GPAK_SEARCH_PATHS, _GPAK_PATH, _ABILITY_DESC, _VISUAL_MUT_DATA
+    _GPAK_SEARCH_PATHS = _candidate_gpak_paths()
+    _GPAK_PATH = next((p for p in _GPAK_SEARCH_PATHS if os.path.exists(p)), None)
+    _ABILITY_DESC = _load_ability_descriptions()
+    _VISUAL_MUT_DATA = _load_visual_mut_data()
+
 
 _VISUAL_MUT_DATA = {}
+_reload_game_data()
 def _read_visual_mutation_entries(table: list[int]) -> list[dict[str, object]]:
     fallback_names = load_visual_mutation_names()
     entries: list[dict[str, object]] = []
