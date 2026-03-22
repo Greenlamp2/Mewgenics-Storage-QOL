@@ -15,7 +15,8 @@ from utils.loaders import load_inventories, load_gold, load_tokens, load_items_p
     load_house_state_raw, load_adventure_keys, load_cats, load_pedigree, \
     load_current_day, load_cat_bank
 from utils.savers import save_inventories as _save_inventories, save_tokens, \
-    save_bank_inventory, save_items_pool, save_bank_folders, save_house_state, save_cat_bank
+    save_bank_inventory, save_items_pool, save_bank_folders, save_house_state, \
+    save_cat_bank, save_new_cat
 
 # Rarities that should never appear in any view
 EXCLUDED_RARITIES = {"sidequest", "quest"}
@@ -300,6 +301,102 @@ class AppController:
         cat.room   = room_name
 
         self._refresh_mtime()
+
+    # ------------------------------------------------------------------
+    # Cat gifts — send / receive via remote PostgreSQL
+    # ------------------------------------------------------------------
+
+    def apply_send_cat(self, cat) -> None:
+        """Send *cat* to the partner via the ``cat_trade`` PostgreSQL table.
+
+        The cat blob is uploaded as-is.  Locally the cat is removed from
+        ``house_state`` (if In House) or ``cat_bank`` (if In Bank) and its
+        status is set to ``"Gone"``.  The row in the ``cats`` table is kept
+        so that pedigree data remains intact.
+
+        Only cats with status ``"In House"`` or ``"In Bank"`` can be sent.
+        """
+        from utils.gift_manager import send_cat as _send_cat, get_steam_id_from_path, get_recipient_id
+
+        if cat.status not in ("In House", "In Bank"):
+            raise ValueError(
+                f"Only cats that are 'In House' or 'In Bank' can be sent "
+                f"('{cat.name}' is currently '{cat.status}')."
+            )
+
+        ctx_id    = get_steam_id_from_path(self.sav_path)
+        recipient = get_recipient_id(ctx_id) if ctx_id is not None else None
+        if recipient is None:
+            raise ValueError(
+                "Cannot determine gift recipient — save file user ID not recognized."
+            )
+
+        # Upload the blob
+        _send_cat(cat.to_blob(), recipient)
+
+        # Remove from local tracking
+        if cat.status == "In House":
+            self._house_state_entries.pop(cat.db_key, None)
+            save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+        elif cat.status == "In Bank":
+            self.cat_bank.pop(cat.db_key, None)
+            save_cat_bank(self.sav_path, self.cat_bank)
+
+        cat.status = "Gone"
+        cat.room   = ""
+        self._refresh_mtime()
+
+    def apply_receive_cats(self) -> list:
+        """Fetch all pending cat blobs from ``cat_trade``, insert them into the
+        local ``cats`` table, and place them in the cat bank so the user can
+        move them to the house whenever ready.
+
+        Returns the list of newly parsed ``Cat`` objects (status = ``"In Bank"``).
+        """
+        import struct
+        from utils.gift_manager import receive_cats as _receive_cats, get_steam_id_from_path
+        from parse.cat import Cat
+
+        my_id = get_steam_id_from_path(self.sav_path)
+        if my_id is None:
+            return []
+
+        blobs = _receive_cats(my_id)
+        if not blobs:
+            return []
+
+        received: list = []
+        for blob in blobs:
+            # Allocate a new db_key and persist the cat blob
+            new_key = save_new_cat(self.sav_path, blob)
+
+            # Build a minimal house_state entry so the cat can be unbanked later.
+            # Format (40 bytes): [u32 cat_key][u32 0][u32 room_len=0][u32 0][24×0x00]
+            entry_bytes = (
+                struct.pack('<II', new_key, 0)
+                + struct.pack('<II', 0, 0)
+                + b'\x00' * 24
+            )
+
+            # Register in cat bank
+            self.cat_bank[new_key] = {
+                'entry_bytes': entry_bytes,
+                'room_name':   '',
+            }
+
+            # Parse the cat so it appears in the Cat Manager immediately
+            try:
+                cat = Cat(blob, new_key, {}, set(), None)
+                cat.status = "In Bank"
+                cat.room   = ""
+                self.cats.append(cat)
+                received.append(cat)
+            except Exception:
+                pass  # blob unreadable — still saved on disk, will appear after next full reload
+
+        save_cat_bank(self.sav_path, self.cat_bank)
+        self._refresh_mtime()
+        return received
 
     def _refresh_mtime(self):
         """Update loaded_mtime to the current file mtime (call after every write)."""

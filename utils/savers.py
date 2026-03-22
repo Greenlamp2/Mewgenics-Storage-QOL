@@ -156,6 +156,21 @@ def save_cat(sav_path: str, cat) -> None:
     conn.close()
 
 
+def save_new_cat(sav_path: str, blob: bytes) -> int:
+    """Insert a brand-new cat blob into the ``cats`` table and return the new db_key.
+
+    The new key is ``max(existing_keys) + 1``.  The blob should be an
+    LZ4-compressed cat blob as produced by ``Cat.to_blob()``.
+    """
+    conn = sqlite3.connect(sav_path)
+    row = conn.execute("SELECT MAX(key) FROM cats").fetchone()
+    new_key = (row[0] if row and row[0] is not None else 0) + 1
+    conn.execute("INSERT INTO cats (key, data) VALUES (?, ?)", (new_key, blob))
+    conn.commit()
+    conn.close()
+    return new_key
+
+
 _BANK_FOLDERS_KEY = "bank_folders_v1"
 
 def save_bank_folders(sav_path: str, data: dict):

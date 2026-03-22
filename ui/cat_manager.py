@@ -215,6 +215,8 @@ class _CatDetail(QScrollArea):
     renamed = Signal(object)   # emits Cat
     # Emitted after a successful bank / unbank action so the list can be rebuilt
     banked  = Signal(object)   # emits Cat
+    # Emitted after a successful send-cat gift so the list can be rebuilt
+    sent    = Signal(object)   # emits Cat
 
     def __init__(self, ctrl=None, parent=None):
         super().__init__(parent)
@@ -306,6 +308,20 @@ class _CatDetail(QScrollArea):
                 )
                 unbank_btn.clicked.connect(lambda: self._do_unbank(cat))
                 name_row.addWidget(unbank_btn)
+
+            # ── Send cat gift button (only for "touchable" cats) ──────
+            if cat.status in ("In House", "In Bank"):
+                send_btn = QPushButton("🎁")
+                send_btn.setFixedSize(28, 28)
+                send_btn.setToolTip("Send this cat as a gift to your partner")
+                send_btn.setStyleSheet(
+                    "QPushButton { background: #2a1a1a; border: 1px solid #aa5555; border-radius: 4px;"
+                    " color: #dd8888; font-size: 13px; padding: 0; }"
+                    "QPushButton:hover { background: #3a2020; color: #ffaaaa; border-color: #cc7777; }"
+                    "QPushButton:pressed { background: #442828; }"
+                )
+                send_btn.clicked.connect(lambda: self._do_send_cat(cat))
+                name_row.addWidget(send_btn)
 
         name_row_w = QWidget()
         name_row_w.setStyleSheet("background: transparent;")
@@ -526,6 +542,41 @@ class _CatDetail(QScrollArea):
         self.show_cat(cat)
         self.banked.emit(cat)
 
+    def _do_send_cat(self, cat) -> None:
+        """Send *cat* as a gift to the partner via the remote PostgreSQL cat_trade table."""
+        try:
+            ctx = self._ctrl.get_gift_context()
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", f"Could not determine gift context:\n{exc}")
+            return
+
+        if not ctx.get("is_known_user"):
+            QMessageBox.warning(
+                self, "Cannot Send Gift",
+                "Your save file's Steam ID was not recognised.\n"
+                "Gift features require a known user pair configured in version.py."
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "🎁 Send Cat",
+            f"Send <b>{cat.name}</b> to <b>{ctx['recipient_name']}</b>?<br><br>"
+            "The cat will be removed from your save.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self._ctrl.apply_send_cat(cat)
+        except Exception as exc:
+            QMessageBox.critical(self, "Send Failed", f"Could not send cat:\n{exc}")
+            return
+
+        self.show_cat(cat)
+        self.sent.emit(cat)
+
     # ── builders ─────────────────────────────────────────────────────
 
     @staticmethod
@@ -629,6 +680,17 @@ class CatManagerWindow(QWidget):
         fb_lay.addWidget(self._count_lbl)
         fb_lay.addStretch()
 
+        # ── Receive cats button ──────────────────────────────────────
+        _recv_style = (
+            "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #884444;"
+            " border-radius: 4px; background: #2a1a1a; color: #cc8888; }"
+            "QPushButton:hover { background: #3a2020; color: #ffaaaa; }"
+        )
+        recv_btn = QPushButton("📬 Receive Cats")
+        recv_btn.setStyleSheet(_recv_style)
+        recv_btn.clicked.connect(self._on_receive_cats)
+        fb_lay.addWidget(recv_btn)
+
         # ── Splitter: list | detail ───────────────────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -648,6 +710,7 @@ class CatManagerWindow(QWidget):
         self._detail = _CatDetail(ctrl=ctrl)
         self._detail.renamed.connect(self._on_cat_renamed)
         self._detail.banked.connect(self._on_cat_banked)
+        self._detail.sent.connect(self._on_cat_sent)
 
         left_frame = QWidget()
         lf_lay = QVBoxLayout(left_frame)
@@ -748,6 +811,38 @@ class CatManagerWindow(QWidget):
         """Called after a bank / unbank action: rebuild the list and reselect the cat."""
         self._rebuild_list()
         self._reselect_cat(cat)
+
+    def _on_cat_sent(self, cat):
+        """Called after a cat gift is sent: rebuild the list (cat is now Gone)."""
+        self._rebuild_list()
+        self._detail.clear()
+
+    def _on_receive_cats(self):
+        """Receive pending cat gifts from the partner and add them to the cat bank."""
+        if self._ctrl is None:
+            return
+        try:
+            received = self._ctrl.apply_receive_cats()
+        except Exception as exc:
+            QMessageBox.critical(self, "Receive Failed", f"Could not receive cats:\n{exc}")
+            return
+
+        if not received:
+            QMessageBox.information(self, "Receive Cats", "No pending cat gifts.")
+            return
+
+        # Rebuild list so received cats appear in the Bank filter
+        self._rebuild_list()
+
+        names_html = "<br>".join(f"• {c.name}" for c in received)
+        QMessageBox.information(
+            self,
+            "Cats Received!",
+            f"<b>{len(received)}</b> cat(s) added to the Cat Bank:<br><br>{names_html}",
+        )
+
+        # Switch to the Bank filter so the user sees the new cats immediately
+        self._set_filter("bank")
 
     def _reselect_cat(self, cat):
         """Find the card for *cat* in the (possibly re-sorted) list and activate it."""

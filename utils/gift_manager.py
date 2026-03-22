@@ -1,13 +1,20 @@
 """
-Gift manager — send/receive items via a remote PostgreSQL trade table.
+Gift manager — send/receive items and cats via a remote PostgreSQL trade table.
 
 Connection is configured via a .env file at the project root:
   DATABASE_URL=postgres://user:pass@host:port/dbname
   OR individual variables:
   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
 
-Trade table schema (create once on the server):
+Item trade table schema (create once on the server):
   CREATE TABLE trade (
+      id      SERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      blob    BYTEA  NOT NULL
+  );
+
+Cat trade table schema (create once on the server):
+  CREATE TABLE cat_trade (
       id      SERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL,
       blob    BYTEA  NOT NULL
@@ -206,4 +213,46 @@ def receive_gifts(my_steam_id: int) -> list[dict]:
         return items
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Cat gift operations
+# ---------------------------------------------------------------------------
+
+def send_cat(cat_blob: bytes, recipient_id: int) -> None:
+    """Insert the LZ4-compressed cat blob into the cat_trade table for recipient_id."""
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO cat_trade (user_id, blob) VALUES (%s, %s)",
+            (recipient_id, cat_blob),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def receive_cats(my_steam_id: int) -> list[bytes]:
+    """Claim all pending cat blobs addressed to my_steam_id, delete them, return raw blobs."""
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, blob FROM cat_trade WHERE user_id = %s",
+            (my_steam_id,),
+        )
+        rows = cur.fetchall()
+        if not rows:
+            return []
+
+        ids   = [row[0] for row in rows]
+        blobs = [bytes(row[1]) for row in rows]
+
+        cur.execute("DELETE FROM cat_trade WHERE id = ANY(%s)", (ids,))
+        conn.commit()
+        return blobs
+    finally:
+        conn.close()
+
 
