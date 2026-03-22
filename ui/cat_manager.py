@@ -1,6 +1,7 @@
 """ui/cat_manager.py — Cat Manager window for browsing all cats in the save."""
 
 import os
+import re
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QIcon
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from catalogs.stat_catalog import STAT_NAMES
+from catalogs.ability_catalog import _ABILITY_LOOKUP
 
 _GENDER_SYMBOL = {"male": "♂", "female": "♀", "?": "⚥"}
 _GENDER_COLOR  = {"male": "#5b9cf6", "female": "#f47abf", "?": "#aaaaaa"}
@@ -20,6 +22,16 @@ STAT_DISPLAY_COLORS = {
     "STR": "#e05050", "DEX": "#50c050", "CON": "#6090e0",
     "INT": "#c0a030", "SPD": "#a060d0", "CHA": "#e08040", "LCK": "#50c0c0",
 }
+
+# ------------------------------------------------------------------
+# Ability description lookup
+# ------------------------------------------------------------------
+
+def _ability_desc(name: str) -> str:
+    """Return description from catalog, or empty string if unknown."""
+    key = re.sub(r'[^a-z0-9]', '', (name or "").lower())
+    return _ABILITY_LOOKUP.get(key, "")
+
 
 # ------------------------------------------------------------------
 # Helpers
@@ -54,12 +66,74 @@ def _info_row(label: str, value: str, value_color: str = "#e0e0e0") -> QWidget:
     lay.setSpacing(6)
     k = QLabel(label)
     k.setStyleSheet("color: #888; font-size: 12px; background: transparent;")
-    k.setFixedWidth(120)
+    k.setFixedWidth(100)
     v = QLabel(value)
     v.setWordWrap(True)
     v.setStyleSheet(f"color: {value_color}; font-size: 12px; background: transparent;")
     lay.addWidget(k)
     lay.addWidget(v, 1)
+    return w
+
+
+def _ability_entry(name: str, desc: str, bg: str, name_color: str, desc_color: str = "#999") -> QWidget:
+    """A single ability/mutation row: name on the left, description on the right (or below if long)."""
+    w = QWidget()
+    w.setStyleSheet(f"background: {bg}; border: 1px solid {name_color}22; border-radius: 5px;")
+    lay = QVBoxLayout(w)
+    lay.setContentsMargins(8, 5, 8, 5)
+    lay.setSpacing(2)
+
+    name_lbl = QLabel(name)
+    name_lbl.setStyleSheet(
+        f"color: {name_color}; font-size: 12px; font-weight: bold; background: transparent;"
+        " border: none;"
+    )
+    lay.addWidget(name_lbl)
+
+    if desc:
+        desc_lbl = QLabel(desc)
+        desc_lbl.setWordWrap(True)
+        desc_lbl.setStyleSheet(
+            f"color: {desc_color}; font-size: 11px; background: transparent; border: none;"
+        )
+        lay.addWidget(desc_lbl)
+
+    return w
+
+
+def _ability_list(
+    items,          # list[str]  OR  list[tuple[str, str]]
+    bg: str,
+    name_color: str,
+    desc_color: str = "#999",
+    use_catalog: bool = True,
+) -> QWidget:
+    """
+    Build a vertical list of _ability_entry widgets.
+    *items* can be:
+      - list[str]          → look up description from catalog if use_catalog=True
+      - list[(name, desc)] → use provided description directly
+    """
+    w = QWidget()
+    w.setStyleSheet("background: transparent;")
+    lay = QVBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(4)
+
+    if not items:
+        none_lbl = QLabel("—")
+        none_lbl.setStyleSheet("color: #666; font-size: 12px; background: transparent;")
+        lay.addWidget(none_lbl)
+        return w
+
+    for entry in items:
+        if isinstance(entry, tuple):
+            name, desc = entry
+        else:
+            name = entry
+            desc = _ability_desc(name) if use_catalog else ""
+        lay.addWidget(_ability_entry(name, desc, bg, name_color, desc_color))
+
     return w
 
 
@@ -121,16 +195,6 @@ class _CatCard(QFrame):
         center.addWidget(sub_lbl)
         lay.addLayout(center, 1)
 
-        # Generation badge
-        gen_lbl = QLabel(f"G{cat.generation}")
-        gen_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        gen_lbl.setFixedSize(30, 20)
-        gen_lbl.setStyleSheet(
-            "background: #2d2d2d; color: #aaaaaa; font-size: 10px;"
-            " border: 1px solid #444; border-radius: 4px;"
-        )
-        lay.addWidget(gen_lbl)
-
     def set_active(self, active: bool):
         self.setStyleSheet(self._ACTIVE if active else self._NORMAL)
 
@@ -167,7 +231,7 @@ class _CatDetail(QScrollArea):
         self._root.setStyleSheet("background: #111;")
         self._layout = QVBoxLayout(self._root)
         self._layout.setContentsMargins(16, 16, 16, 16)
-        self._layout.setSpacing(14)
+        self._layout.setSpacing(12)
         self.setWidget(self._root)
 
         self._empty_lbl = QLabel("← Select a cat")
@@ -180,16 +244,15 @@ class _CatDetail(QScrollArea):
 
     def show_cat(self, cat) -> None:
         """Rebuild the detail panel for *cat*."""
-        # Clear existing content
         while self._layout.count():
             item = self._layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        # ── Header: name + status ─────────────────────────────────────
+        # ── Header ───────────────────────────────────────────────────
         header = QWidget()
         h_lay = QVBoxLayout(header)
-        h_lay.setContentsMargins(0, 0, 0, 0)
+        h_lay.setContentsMargins(0, 0, 0, 4)
         h_lay.setSpacing(4)
 
         name_lbl = QLabel(cat.name or "(unknown)")
@@ -200,7 +263,7 @@ class _CatDetail(QScrollArea):
         )
         h_lay.addWidget(name_lbl)
 
-        # Special flags row (is_blacklisted, must_breed)
+        # Special flags
         flags_row = QHBoxLayout()
         flags_row.setContentsMargins(0, 0, 0, 0)
         flags_row.setSpacing(6)
@@ -220,18 +283,36 @@ class _CatDetail(QScrollArea):
             )
             flags_row.addWidget(mb)
         if flags_row.count():
-            flags_widget = QWidget()
-            flags_widget.setLayout(flags_row)
-            h_lay.addWidget(flags_widget)
+            fw = QWidget()
+            fw.setLayout(flags_row)
+            h_lay.addWidget(fw)
 
         status = cat.status
         s_color = _STATUS_COLOR.get(status, "#888")
-        status_lbl = QLabel(f"{_STATUS_ICON.get(status, '')}  {status}")
-        status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        status_lbl.setStyleSheet(f"color: {s_color}; font-size: 13px; background: transparent;")
-        h_lay.addWidget(status_lbl)
+        row2 = QHBoxLayout()
+        row2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row2.setSpacing(10)
 
-        # Collar (if any)
+        status_lbl = QLabel(f"{_STATUS_ICON.get(status, '')}  {status}")
+        status_lbl.setStyleSheet(f"color: {s_color}; font-size: 13px; background: transparent;")
+        row2.addWidget(status_lbl)
+
+        g = cat.gender
+        gender_lbl = QLabel(f"{_GENDER_SYMBOL.get(g, '?')} {g.capitalize()}")
+        gender_lbl.setStyleSheet(
+            f"color: {_GENDER_COLOR.get(g, '#aaa')}; font-size: 13px; background: transparent;"
+        )
+        row2.addWidget(gender_lbl)
+
+        if cat.age is not None:
+            age_lbl = QLabel(f"🕐 {cat.age}d")
+            age_lbl.setStyleSheet("color: #aaa; font-size: 12px; background: transparent;")
+            row2.addWidget(age_lbl)
+
+        row2_w = QWidget()
+        row2_w.setLayout(row2)
+        h_lay.addWidget(row2_w)
+
         if cat.collar:
             collar_lbl = QLabel(f"🎀 {cat.collar}")
             collar_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -241,25 +322,10 @@ class _CatDetail(QScrollArea):
         self._layout.addWidget(header)
         self._layout.addWidget(_hsep())
 
-        # ── Identity ──────────────────────────────────────────────────
-        self._layout.addWidget(_section_label("🐱  Identity"))
-
-        g = cat.gender
-        gender_src = getattr(cat, "gender_source", "")
-        gender_src_note = f" ({gender_src})" if gender_src else ""
-        self._layout.addWidget(_info_row(
-            "Gender",
-            f"{_GENDER_SYMBOL.get(g, '?')} {g.capitalize()}{gender_src_note}",
-            _GENDER_COLOR.get(g, "#aaa"),
-        ))
-        self._layout.addWidget(_info_row("Breed ID",   str(cat.breed_id)))
-        self._layout.addWidget(_info_row("Generation", f"G{cat.generation}"))
-        self._layout.addWidget(_info_row("Room",       cat.room or "—"))
-        if cat.age is not None:
-            self._layout.addWidget(_info_row("Age",    f"{cat.age} day(s)"))
-        self._layout.addWidget(_info_row("Unique ID",  cat.unique_id, "#666"))
-
-        self._layout.addWidget(_hsep())
+        # ── Location ─────────────────────────────────────────────────
+        if cat.room and cat.room not in (cat.status, ""):
+            self._layout.addWidget(_info_row("Room", cat.room))
+            self._layout.addWidget(_hsep())
 
         # ── Stats ─────────────────────────────────────────────────────
         self._layout.addWidget(_section_label("📊  Stats"))
@@ -268,50 +334,71 @@ class _CatDetail(QScrollArea):
 
         # ── Personality ───────────────────────────────────────────────
         self._layout.addWidget(_section_label("🧠  Personality"))
-        self._layout.addWidget(_info_row("Aggression", _fmt_pct(cat.aggression), "#e05050"))
-        self._layout.addWidget(_info_row("Libido",     _fmt_pct(cat.libido),     "#e090c0"))
-        self._layout.addWidget(_info_row("Inbredness", _fmt_pct(cat.inbredness), "#c0a030"))
-        self._layout.addWidget(_info_row("Sexuality",  (cat.sexuality or "—").capitalize()))
+        pers_row = QHBoxLayout()
+        pers_row.setSpacing(8)
+        for label, val, color in [
+            ("Aggression", _fmt_pct(cat.aggression), "#e05050"),
+            ("Libido",     _fmt_pct(cat.libido),     "#e090c0"),
+            ("Inbredness", _fmt_pct(cat.inbredness), "#c0a030"),
+        ]:
+            pill = QLabel(f"<b style='color:{color}'>{label}</b><br>{val}")
+            pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pill.setStyleSheet(
+                f"background: #1c1c1c; border: 1px solid #333; border-radius: 5px;"
+                f" padding: 4px 8px; font-size: 11px; color: #ccc;"
+            )
+            pers_row.addWidget(pill, 1)
+        pers_w = QWidget()
+        pers_w.setLayout(pers_row)
+        self._layout.addWidget(pers_w)
         self._layout.addWidget(_hsep())
 
         # ── Abilities ─────────────────────────────────────────────────
         self._layout.addWidget(_section_label("⚔️  Abilities"))
-        self._layout.addWidget(_chip_row(cat.abilities, "#1e3a5a", "#5b9cf6"))
+        self._layout.addWidget(
+            _ability_list(cat.abilities, "#131d2a", "#5b9cf6", use_catalog=True)
+        )
 
         if cat.passive_abilities:
             self._layout.addWidget(_section_label("●  Passives"))
-            self._layout.addWidget(_chip_row(cat.passive_abilities, "#1a3a1a", "#66cc66"))
+            self._layout.addWidget(
+                _ability_list(cat.passive_abilities, "#13261a", "#66cc66", use_catalog=True)
+            )
 
         if cat.disorders:
             self._layout.addWidget(_section_label("⚠  Disorders"))
-            self._layout.addWidget(_chip_row(cat.disorders, "#3a1a1a", "#e05050"))
+            self._layout.addWidget(
+                _ability_list(cat.disorders, "#261313", "#e05050", use_catalog=True)
+            )
 
-        # Equipment (if any — only cats that use the fallback ability parser have this)
         equipment = getattr(cat, "equipment", [])
         if equipment:
             self._layout.addWidget(_section_label("🎒  Equipment"))
-            self._layout.addWidget(_chip_row(equipment, "#1a1a2a", "#b0a0e0"))
+            self._layout.addWidget(
+                _ability_list(equipment, "#1a1a2a", "#b0a0e0", use_catalog=False)
+            )
 
-        self._layout.addWidget(_hsep())
-
-        # ── Mutations / Defects — use chip_items for tooltips ─────────
+        # ── Mutations / Defects ───────────────────────────────────────
         mutation_chip_items = getattr(cat, "mutation_chip_items", [])
         defect_chip_items   = getattr(cat, "defect_chip_items",   [])
 
         if mutation_chip_items or defect_chip_items:
-            self._layout.addWidget(_section_label("🧬  Mutations"))
+            self._layout.addWidget(_hsep())
             if mutation_chip_items:
+                self._layout.addWidget(_section_label("🧬  Mutations"))
                 self._layout.addWidget(
-                    _chip_row_tips(mutation_chip_items, "#1a2a3a", "#80bbdd")
+                    _ability_list(mutation_chip_items, "#131c26", "#80bbdd",
+                                  desc_color="#7aaacc", use_catalog=False)
                 )
             if defect_chip_items:
                 self._layout.addWidget(_section_label("⚡  Defects"))
                 self._layout.addWidget(
-                    _chip_row_tips(defect_chip_items, "#3a2a1a", "#e0a030")
+                    _ability_list(defect_chip_items, "#261c13", "#e0a030",
+                                  desc_color="#b07820", use_catalog=False)
                 )
-            self._layout.addWidget(_hsep())
 
         # ── Family ────────────────────────────────────────────────────
+        self._layout.addWidget(_hsep())
         self._layout.addWidget(_section_label("👨‍👩‍👧  Family"))
         pa = cat.parent_a.name if cat.parent_a else "—"
         pb = cat.parent_b.name if cat.parent_b else "—"
@@ -324,7 +411,6 @@ class _CatDetail(QScrollArea):
         self._layout.addStretch()
 
     def clear(self):
-        """Show the empty placeholder."""
         while self._layout.count():
             item = self._layout.takeAt(0)
             if item.widget():
@@ -351,16 +437,13 @@ class _CatDetail(QScrollArea):
             color = STAT_DISPLAY_COLORS.get(stat, "#ccc")
             diff  = total - base
 
-            # Stat name
             name_lbl = QLabel(stat)
             name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             name_lbl.setStyleSheet(
-                f"color: {color}; font-size: 10px; font-weight: bold;"
-                f" background: transparent;"
+                f"color: {color}; font-size: 10px; font-weight: bold; background: transparent;"
             )
             grid.addWidget(name_lbl, 0, col)
 
-            # Value
             diff_str = f" ({'+' if diff >= 0 else ''}{diff})" if diff != 0 else ""
             val_lbl = QLabel(f"{base}{diff_str}")
             val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -383,38 +466,6 @@ def _hsep() -> QFrame:
     sep.setFrameShape(QFrame.Shape.HLine)
     sep.setStyleSheet("QFrame { color: #2a2a2a; }")
     return sep
-
-
-def _chip_row(items: list[str], bg: str, fg: str) -> QWidget:
-    """A wrapping row of small coloured chips (no tooltips)."""
-    return _chip_row_tips([(t, "") for t in items], bg, fg)
-
-
-def _chip_row_tips(items: list[tuple[str, str]], bg: str, fg: str) -> QWidget:
-    """A wrapping row of coloured chips, each with an optional tooltip."""
-    w = QWidget()
-    w.setStyleSheet("background: transparent;")
-    lay = QHBoxLayout(w)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(4)
-    lay.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
-    if not items:
-        none_lbl = QLabel("—")
-        none_lbl.setStyleSheet("color: #666; font-size: 12px; background: transparent;")
-        lay.addWidget(none_lbl)
-    else:
-        for name, tip in items:
-            chip = QLabel(name)
-            chip.setStyleSheet(
-                f"background: {bg}; color: {fg}; font-size: 11px;"
-                f" border: 1px solid {fg}44; border-radius: 4px; padding: 2px 6px;"
-            )
-            if tip:
-                chip.setToolTip(tip)
-            lay.addWidget(chip)
-    lay.addStretch()
-    return w
 
 
 # ------------------------------------------------------------------
@@ -445,7 +496,7 @@ class CatManagerWindow(QWidget):
         fb_lay.setContentsMargins(10, 6, 10, 6)
         fb_lay.setSpacing(6)
 
-        self._filter = "house"   # default: show In House only
+        self._filter = "house"
         _btn_style_active = (
             "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #4caf50;"
             " border-radius: 4px; background: #1a2d1a; color: #4caf50; font-weight: bold; }"
@@ -459,15 +510,14 @@ class CatManagerWindow(QWidget):
         self._filter_btn_active_style = _btn_style_active
         self._filter_btn_normal_style = _btn_style
 
-        for key, label in [("house", "🏠 In House"), ("adventure", "⚔️ Adventure"),
-                            ("all", "🐱 All")]:
+        # Only "In House" and "Adventure" — no "All"
+        for key, label in [("house", "🏠 In House"), ("adventure", "⚔️ Adventure")]:
             btn = QPushButton(label)
             btn.setStyleSheet(_btn_style_active if key == self._filter else _btn_style)
             btn.clicked.connect(lambda _=False, k=key: self._set_filter(k))
             self._filter_btns[key] = btn
             fb_lay.addWidget(btn)
 
-        # Cat count label
         self._count_lbl = QLabel()
         self._count_lbl.setStyleSheet("color: #666; font-size: 12px; background: transparent;")
         fb_lay.addWidget(self._count_lbl)
@@ -476,7 +526,6 @@ class CatManagerWindow(QWidget):
         # ── Splitter: list | detail ───────────────────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left: scroll area with cat cards
         self._list_container = QWidget()
         self._list_container.setStyleSheet("background: #141414;")
         self._list_layout = QVBoxLayout(self._list_container)
@@ -487,12 +536,9 @@ class CatManagerWindow(QWidget):
         list_scroll = QScrollArea()
         list_scroll.setWidgetResizable(True)
         list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        list_scroll.setStyleSheet(
-            "QScrollArea { border: none; background: #141414; }"
-        )
+        list_scroll.setStyleSheet("QScrollArea { border: none; background: #141414; }")
         list_scroll.setWidget(self._list_container)
 
-        # Right: detail panel
         self._detail = _CatDetail()
 
         left_frame = QWidget()
@@ -506,14 +552,12 @@ class CatManagerWindow(QWidget):
         splitter.setSizes([320, 730])
         splitter.setHandleWidth(4)
 
-        # ── Root layout ───────────────────────────────────────────────
         root_lay = QVBoxLayout(self)
         root_lay.setContentsMargins(0, 0, 0, 0)
         root_lay.setSpacing(0)
         root_lay.addWidget(filter_bar)
         root_lay.addWidget(splitter, 1)
 
-        # Initial population
         self._rebuild_list()
 
     # ── Filter ───────────────────────────────────────────────────────
@@ -537,7 +581,6 @@ class CatManagerWindow(QWidget):
     # ── List ─────────────────────────────────────────────────────────
 
     def _rebuild_list(self):
-        # Clear existing cards
         while self._list_layout.count():
             item = self._list_layout.takeAt(0)
             if item.widget():
@@ -556,8 +599,7 @@ class CatManagerWindow(QWidget):
             self._list_layout.addWidget(empty)
             return
 
-        # Sort: In House first, then alphabetically
-        cats_sorted = sorted(cats, key=lambda c: (c.status != "In House", c.name or ""))
+        cats_sorted = sorted(cats, key=lambda c: (c.name or ""))
 
         for cat in cats_sorted:
             card = _CatCard(cat)
@@ -567,11 +609,9 @@ class CatManagerWindow(QWidget):
         self._list_layout.addStretch()
 
     def _on_cat_selected(self, cat):
-        # Deactivate previous card
         if self._active_card is not None:
             self._active_card.set_active(False)
 
-        # Find and activate the new card
         for i in range(self._list_layout.count()):
             item = self._list_layout.itemAt(i)
             if item and item.widget() and isinstance(item.widget(), _CatCard):
