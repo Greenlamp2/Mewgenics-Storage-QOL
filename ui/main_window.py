@@ -1024,10 +1024,14 @@ class MainWindow(QMainWindow):
 
     def _open_cat_manager(self):
         from ui.cat_manager import CatManagerWindow
+        # Load cats on demand — this is intentionally deferred from startup.
+        self.ctrl.load_cats_data()
         if not hasattr(self, "_cat_manager_win") or self._cat_manager_win is None:
             self._cat_manager_win = CatManagerWindow(self.ctrl.cats, ctrl=self.ctrl, parent=None)
             self._cat_manager_win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             self._cat_manager_win.destroyed.connect(lambda: setattr(self, "_cat_manager_win", None))
+        else:
+            self._cat_manager_win.refresh(self.ctrl.cats)
         self._cat_manager_win.show()
         self._cat_manager_win.raise_()
         self._cat_manager_win.activateWindow()
@@ -1095,6 +1099,7 @@ class MainWindow(QMainWindow):
             self._show_overlay()
         # Keep Cat Manager in sync if it is open
         if hasattr(self, "_cat_manager_win") and self._cat_manager_win is not None:
+            self.ctrl.load_cats_data()
             self._cat_manager_win.refresh(self.ctrl.cats)
 
     def _hide_all_action_btns(self):

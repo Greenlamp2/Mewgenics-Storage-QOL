@@ -58,7 +58,12 @@ class AppController:
     # ------------------------------------------------------------------
 
     def load_data(self):
-        """Load (or reload) all data from the save file."""
+        """Load (or reload) all item/token/gold data from the save file.
+
+        Cat data is intentionally **not** loaded here — call
+        ``load_cats_data()`` separately when the Cat Manager is opened.
+        This keeps startup fast for users who only manage items.
+        """
         raw = load_inventories(self.sav_path)
         self.loaded_mtime = (
             os.path.getmtime(self.sav_path) if os.path.exists(self.sav_path) else None
@@ -105,42 +110,52 @@ class AppController:
             "Bank":    self.inventories["bank"].items,
             "Pool":    self.pool_items + self.undiscovered_pool_items,
         }
-        adv = load_adventure_keys(self.sav_path)
+
+        # Cats are NOT loaded here — call load_cats_data() on demand.
+        self.cats = []
+
+    # ------------------------------------------------------------------
+    # Cat data loading (on-demand — called by Cat Manager only)
+    # ------------------------------------------------------------------
+
+    def load_cats_data(self):
+        """Parse all cats from the save file and resolve relationships.
+
+        This is intentionally separated from ``load_data()`` because LZ4
+        decompression of every cat blob is slow and unnecessary when the user
+        only wants to manage items.  ``CatManagerWindow`` calls this method
+        just before it is displayed.
+        """
+        adv      = load_adventure_keys(self.sav_path)
         raw_cats = load_cats(self.sav_path)
 
-        # Load house_state once for both Cat init (house_info) and round-trip (entries)
+        # Load house_state for both Cat init (house_info) and round-trip (entries)
         hs_prefix, house, hs_entries = load_house_state_raw(self.sav_path)
         self._house_state_prefix  = hs_prefix
         self._house_state_entries = hs_entries
-        self._house_state_info    = dict(house)  # kept in sync for room lookups
+        self._house_state_info    = dict(house)
 
-        # Load cat bank
-        self.cat_bank = load_cat_bank(self.sav_path)
-        ped_map = load_pedigree(self.sav_path)
-        current_day = load_current_day(self.sav_path)
+        self.cat_bank           = load_cat_bank(self.sav_path)
+        ped_map                 = load_pedigree(self.sav_path)
+        current_day             = load_current_day(self.sav_path)
         self.newborn_kill_count = load_newborn_kills(self.sav_path)
 
-        cats, errors = [], []
+        cats: list = []
         for key, blob in raw_cats:
             try:
                 cats.append(Cat(blob, key, house, adv, current_day))
-            except Exception as e:
-                errors.append((key, str(e)))
+            except Exception:
+                pass
 
         key_to_cat: dict = {c.db_key: c for c in cats}
 
         for cat in cats:
-            # Pedigree db_key lookup — only assigns a parent if that cat is still
-            # present in the save.  If the real parents are gone (dead/sold), we
-            # leave parent_a/parent_b as None rather than falling back to an
-            # unreliable blob-UID scan that picks up wrong living cats.
             pa: Optional[Cat] = None
             pb: Optional[Cat] = None
             if cat.db_key in ped_map:
                 pa_k, pb_k = ped_map[cat.db_key]
                 pa = key_to_cat.get(pa_k)
                 pb = key_to_cat.get(pb_k)
-                # Sanity: a cat cannot be its own parent
                 if pa is cat: pa = None
                 if pb is cat: pb = None
             cat.parent_a = pa
@@ -158,8 +173,7 @@ class AppController:
                 if other is not None and other is not cat and other not in cat.haters:
                     cat.haters.append(other)
 
-        # Build children bottom-up from the now-resolved parent fields.
-        # This avoids the circular-reference problem in the pedigree blob.
+        # Build children bottom-up
         for cat in cats:
             cat.children = []
         for cat in cats:
@@ -167,34 +181,28 @@ class AppController:
                 if parent is not None and cat not in parent.children:
                     parent.children.append(cat)
 
-        # Compute generation depth safely (iterative; handles cycles)
-        # Strays: generation 0
+        # Compute generation depth (iterative, handles cycles)
         for c in cats:
             c.generation = 0 if (c.parent_a is None and c.parent_b is None) else -1
 
-        # Relaxation: propagate parent generations downward until stable
         for _ in range(len(cats) + 1):
             changed = False
             for c in cats:
                 pa_g = c.parent_a.generation if c.parent_a is not None else -1
                 pb_g = c.parent_b.generation if c.parent_b is not None else -1
-
-                # If at least one parent has a known generation, we can set this cat's generation.
                 if pa_g >= 0 or pb_g >= 0:
                     g = max(pa_g, pb_g) + 1
                     if c.generation != g:
                         c.generation = g
                         changed = True
-
             if not changed:
                 break
 
-        # Any remaining -1 are part of cycles or disconnected-from-stray components; default them to 0.
         for c in cats:
             if c.generation < 0:
                 c.generation = 0
 
-        # Mark cats that are in the cat bank (they were removed from house_state when banked)
+        # Mark cats that are in the cat bank
         for cat in cats:
             if cat.db_key in self.cat_bank:
                 cat.status = "In Bank"
