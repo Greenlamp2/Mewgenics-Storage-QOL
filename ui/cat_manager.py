@@ -18,6 +18,19 @@ _GENDER_COLOR  = {"male": "#5b9cf6", "female": "#f47abf", "?": "#aaaaaa"}
 _STATUS_COLOR  = {"In House": "#4caf50", "Adventure": "#ff9800", "Gone": "#666666", "In Bank": "#7b68ee"}
 _STATUS_ICON   = {"In House": "🏠", "Adventure": "⚔️", "Gone": "💨", "In Bank": "🏦"}
 
+ROOM_DISPLAY_NAMES: dict[str, str] = {
+    "Floor1_Large": "RDC Gauche",
+    "Floor1_Small": "RDC Droite",
+    "Floor2_Small": "Etage Gauche",
+    "Floor2_Large": "Etage Droite",
+    "Attic":        "Grenier",
+}
+
+
+def _room_display(room_name: str) -> str:
+    """Return a human-friendly display name for a room key."""
+    return ROOM_DISPLAY_NAMES.get(room_name, room_name)
+
 STAT_DISPLAY_COLORS = {
     "STR": "#e05050", "DEX": "#50c050", "CON": "#6090e0",
     "INT": "#c0a030", "SPD": "#a060d0", "CHA": "#e08040", "LCK": "#50c0c0",
@@ -150,7 +163,7 @@ class _RoomHeader(QWidget):
         lay.setContentsMargins(10, 4, 8, 4)
         lay.setSpacing(6)
 
-        lbl = QLabel(f"🏠  {room_name}  ({count})")
+        lbl = QLabel(f"🏠  {_room_display(room_name)}  ({count})")
         lbl.setStyleSheet(
             "color: #777; font-size: 11px; font-weight: bold;"
             " background: transparent; border: none;"
@@ -216,7 +229,7 @@ class _CatCard(QFrame):
         center.addWidget(self._name_lbl)
 
         status = cat.status
-        room_text = cat.room if cat.room and cat.room != status else status
+        room_text = _room_display(cat.room) if cat.room and cat.room != status else status
         sub_lbl = QLabel(f"{_STATUS_ICON.get(status, '')}  {room_text}")
         sub_lbl.setStyleSheet(
             f"color: {_STATUS_COLOR.get(status, '#888')}; font-size: 11px; background: transparent;"
@@ -689,13 +702,19 @@ class _CatDetail(QScrollArea):
             QMessageBox.information(self, "No Rooms", "No rooms found in the current house state.")
             return
         from PySide6.QtWidgets import QInputDialog
-        room, ok = QInputDialog.getItem(
-            self, "Move to Room",
-            f"Choose destination room for <b>{cat.name}</b>:",
-            rooms, 0, False,
-        )
-        if not ok or not room:
+        display_names = [_room_display(r) for r in rooms]
+        dlg = QInputDialog(self)
+        dlg.setWindowTitle("Move to Room")
+        dlg.setLabelText(f"Choose destination room for {cat.name}:")
+        dlg.setComboBoxItems(display_names)
+        dlg.setComboBoxEditable(False)
+        dlg.setMinimumWidth(360)
+        ok = dlg.exec()
+        display = dlg.textValue()
+        if not ok or not display:
             return
+        # Map display name back to internal room key
+        room = rooms[display_names.index(display)] if display in display_names else display
         if room == cat.room:
             return
         try:
@@ -1568,20 +1587,26 @@ class CatManagerWindow(QWidget):
             QMessageBox.information(self, "No Rooms", "No rooms found in the current house state.")
             return
         from PySide6.QtWidgets import QInputDialog
-        room, ok = QInputDialog.getItem(
-            self, "Move to Room",
-            f"Choose destination room for {len(house_cats)} cat(s):",
-            rooms, 0, False,
-        )
-        if not ok or not room:
+        display_names = [_room_display(r) for r in rooms]
+        dlg = QInputDialog(self)
+        dlg.setWindowTitle("Move to Room")
+        dlg.setLabelText(f"Choose destination room for {len(house_cats)} cat(s):")
+        dlg.setComboBoxItems(display_names)
+        dlg.setComboBoxEditable(False)
+        dlg.setMinimumWidth(360)
+        ok = dlg.exec()
+        display = dlg.textValue()
+        if not ok or not display:
             return
+        # Map display name back to internal room key
+        room = rooms[display_names.index(display)] if display in display_names else display
         try:
             moved = self._ctrl.apply_move_cats_room_multiple(house_cats, room)
         except Exception as exc:
             QMessageBox.critical(self, "Move Failed", str(exc))
             return
         self._rebuild_list()
-        QMessageBox.information(self, "Done", f"{moved} cat(s) moved to <b>{room}</b>.")
+        QMessageBox.information(self, "Done", f"{moved} cat(s) moved to <b>{_room_display(room)}</b>.")
 
     def _ms_do_delete(self):
         """Delete all ms-selected newborns."""
