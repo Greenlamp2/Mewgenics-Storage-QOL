@@ -1222,7 +1222,7 @@ class CatManagerWindow(QWidget):
         if self._filter == "newborns":
             babies = [
                 c for c in self._cats
-                if getattr(c, "age", None) == 1 and c.status != "Gone"
+                if getattr(c, "age", None) == 1 and c.status == "In House"
             ]
             # ── Mutation / disorder sub-filter ────────────────────────
             sf = self._sub_filter

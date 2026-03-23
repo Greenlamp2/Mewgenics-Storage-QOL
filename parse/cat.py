@@ -345,10 +345,11 @@ class Cat:
         buf    = bytearray(self._raw)
         anchor = self._personality_anchor
 
-        # ── Zero parent UIDs (u64 each) ──────────────────────────────────────
+        # ── Reset parent UIDs (u64 each) ─────────────────────────────────────
+        # 4294967297 (0x1_0000_0001) is the game's "no parent" sentinel for _parent_uid_a.
         if anchor + 16 <= len(buf):
-            struct.pack_into('<Q', buf, anchor,     0)  # _parent_uid_a
-            struct.pack_into('<Q', buf, anchor + 8, 0)  # _parent_uid_b
+            struct.pack_into('<Q', buf, anchor,     4294967297)  # _parent_uid_a — game sentinel
+            struct.pack_into('<Q', buf, anchor + 8, 0)          # _parent_uid_b — zero
 
         # ── Zero lover / hater db_keys (u32 each) ───────────────────────────
         if anchor + 52 <= len(buf):
@@ -374,7 +375,7 @@ class Cat:
         self._raw = bytes(buf)
 
         # ── Reset in-memory relationship / lineage fields ────────────────────
-        self._parent_uid_a = 0
+        self._parent_uid_a = 4294967297  # game's "no parent" sentinel
         self._parent_uid_b = 0
         self._lover_uids   = []
         self._hater_uids   = []
