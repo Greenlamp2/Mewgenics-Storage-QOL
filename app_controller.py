@@ -335,6 +335,10 @@ class AppController:
                 "Cannot determine gift recipient — save file user ID not recognized."
             )
 
+        # Strip genealogy tree and reset age to 2 before sending
+        current_day = int(self.save_properties.get("current_day") or 0)
+        cat.strip_genealogy(current_day)
+
         # Upload the blob
         _send_cat(cat.to_blob(), recipient)
 
@@ -541,7 +545,9 @@ class AppController:
             raise ValueError("Cannot determine gift recipient — save file user ID not recognized.")
         hs_changed   = False
         bank_changed = False
+        current_day  = int(self.save_properties.get("current_day") or 0)
         for cat in sendable:
+            cat.strip_genealogy(current_day)
             _send_cat(cat.to_blob(), recipient)
             if cat.status == "In House":
                 self._house_state_entries.pop(cat.db_key, None)

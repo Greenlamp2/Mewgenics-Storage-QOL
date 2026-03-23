@@ -322,6 +322,71 @@ class Cat:
     def parse(self, path):
         pass
 
+    # ── Genealogy strip ──────────────────────────────────────────────────────
+
+    def strip_genealogy(self, current_day: int) -> None:
+        """Zero-out all genealogy-related fields in the raw blob and reset
+        in-memory relationship / lineage attributes.
+
+        Should be called just before ``to_blob()`` when exporting a cat as a
+        gift, so the recipient receives a clean cat with no family ties.
+
+        Fields patched in ``_raw``:
+          - ``_parent_uid_a`` / ``_parent_uid_b`` → u64 0
+          - lover / hater db_keys (u32 @ anchor+48, anchor+72) → 0
+          - inbredness (f64 @ anchor+40) → 0.0
+          - creation_day (near blob end) → ``current_day - 2``  (age = 2)
+
+        In-memory fields reset:
+          ``parent_a``, ``parent_b``, ``lovers``, ``haters``, ``children``,
+          ``generation``, ``_parent_uid_a``, ``_parent_uid_b``,
+          ``_lover_uids``, ``_hater_uids``, ``inbredness``, ``age``.
+        """
+        buf    = bytearray(self._raw)
+        anchor = self._personality_anchor
+
+        # ── Zero parent UIDs (u64 each) ──────────────────────────────────────
+        if anchor + 16 <= len(buf):
+            struct.pack_into('<Q', buf, anchor,     0)  # _parent_uid_a
+            struct.pack_into('<Q', buf, anchor + 8, 0)  # _parent_uid_b
+
+        # ── Zero lover / hater db_keys (u32 each) ───────────────────────────
+        if anchor + 52 <= len(buf):
+            struct.pack_into('<I', buf, anchor + 48, 0)  # lover
+        if anchor + 76 <= len(buf):
+            struct.pack_into('<I', buf, anchor + 72, 0)  # hater
+
+        # ── Reset inbredness to 0.0 (f64) ───────────────────────────────────
+        if anchor + 48 <= len(buf):
+            struct.pack_into('<d', buf, anchor + 40, 0.0)
+
+        # ── Patch creation_day so age == 2 ──────────────────────────────────
+        target_creation = max(0, current_day - 2)
+        for offset_from_end in [103, 102, 104, 101, 105, 100, 106, 107, 108, 109, 110]:
+            pos = len(buf) - offset_from_end
+            if pos < 0 or pos + 4 > len(buf):
+                continue
+            creation_day = struct.unpack_from('<I', buf, pos)[0]
+            if 0 <= creation_day <= current_day:
+                struct.pack_into('<I', buf, pos, target_creation)
+                break
+
+        self._raw = bytes(buf)
+
+        # ── Reset in-memory relationship / lineage fields ────────────────────
+        self._parent_uid_a = 0
+        self._parent_uid_b = 0
+        self._lover_uids   = []
+        self._hater_uids   = []
+        self.parent_a      = None
+        self.parent_b      = None
+        self.lovers        = []
+        self.haters        = []
+        self.children      = []
+        self.generation    = 0
+        self.inbredness    = 0.0
+        self.age           = 2
+
     # ── Rename ───────────────────────────────────────────────────────────────
 
     def rename_in_blob(self, new_name: str) -> None:
