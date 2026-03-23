@@ -1580,8 +1580,8 @@ class MainWindow(QMainWindow):
         self.ms_to_storage_btn.setVisible(is_bank or is_trash)
         self.ms_bank_to_trash_btn.setVisible(is_bank)
 
-        # Gift button — only for Storage
-        if is_storage:
+        # Gift button — Storage and Bank
+        if is_storage or is_bank:
             try:
                 ctx = self.ctrl.get_gift_context()
                 if ctx.get("is_known_user"):
@@ -1707,15 +1707,21 @@ class MainWindow(QMainWindow):
                 DEBUG_MODE and is_pool_tab and not is_locked
             )
         elif is_bank_tab:
-            # Bank tab: allow withdrawing to storage or trashing
+            # Bank tab: allow withdrawing to storage, trashing, or sending as gift
             self.clone_to_storage_btn.setVisible(False)
             self.sacrifice_btn.setVisible(False)
             self.repair_btn.setVisible(False)
             self.move_btn.setVisible(False)
-            self.send_gift_btn.setVisible(False)
             self.bank_btn.setText("📤 Move to Storage")
             self.bank_btn.setVisible(True)
             self.bank_to_trash_btn.setVisible(True)
+            # Gift button — bank items
+            ctx = self.ctrl.get_gift_context()
+            if ctx["is_known_user"]:
+                self.send_gift_btn.setText(f"🎁 Send to {ctx['recipient_name']}")
+                self.send_gift_btn.setVisible(True)
+            else:
+                self.send_gift_btn.setVisible(False)
         else:
             self.clone_to_storage_btn.setVisible(False)
             self.bank_to_trash_btn.setVisible(False)
@@ -1817,15 +1823,18 @@ class MainWindow(QMainWindow):
         if not self._confirm_if_save_changed():
             return
 
+        current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
+        src_key     = TAB_TO_INV_KEY.get(current_tab, "storage")   # "storage" or "bank"
+
         ctx = self.ctrl.get_gift_context()
         if not ctx.get("is_known_user"):
             QMessageBox.warning(self, "Error", "Could not determine the gift recipient.")
             return
 
         indices    = sorted(self._multi_selection.keys())
-        storage    = self.ctrl.inventories["storage"]
+        inventory  = self.ctrl.inventories[src_key]
         item_names = [
-            ((storage.items[i].details or {}).get("name_resolved") or storage.items[i].name or "?")
+            ((inventory.items[i].details or {}).get("name_resolved") or inventory.items[i].name or "?")
             for i in indices
         ]
         items_html = "<br>".join(f"• {n}" for n in item_names)
@@ -1845,7 +1854,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            count = self.ctrl.apply_send_gift_multiple(indices)
+            count = self.ctrl.apply_send_gift_multiple(indices, src_key)
         except Exception as exc:
             QMessageBox.critical(self, "Error", f"Failed to send gifts:\n{exc}")
             return
@@ -1854,7 +1863,10 @@ class MainWindow(QMainWindow):
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
-        self._populate(self.ctrl.inv_items["Storage"])
+        if current_tab == "Bank":
+            self._populate_bank()
+        else:
+            self._populate(self.ctrl.inv_items[current_tab])
         QMessageBox.information(
             self, "Gifts Sent",
             f"<b>{count}</b> item(s) sent to {ctx['recipient_name']}!"
@@ -2106,14 +2118,15 @@ class MainWindow(QMainWindow):
         self.ctrl.apply_clone_to_storage(self._selected_item_idx)
 
     def _send_gift(self):
-        if self._selected_item_idx is None or self._selected_inv_key != "Storage":
+        if self._selected_item_idx is None or self._selected_inv_key not in ("Storage", "Bank"):
             return
         if not self._confirm_if_save_changed():
             return
 
-        ctx  = self.ctrl.get_gift_context()
-        item = self.ctrl.inventories["storage"].items[self._selected_item_idx]
-        name = (item.details or {}).get("name_resolved") or item.name or "?"
+        ctx      = self.ctrl.get_gift_context()
+        inv_key  = TAB_TO_INV_KEY[self._selected_inv_key]   # "storage" or "bank"
+        item     = self.ctrl.inventories[inv_key].items[self._selected_item_idx]
+        name     = (item.details or {}).get("name_resolved") or item.name or "?"
 
         msg = QMessageBox(self)
         msg.setWindowTitle("🎁 Send Gift")
@@ -2128,17 +2141,21 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self.ctrl.apply_send_gift("storage", self._selected_item_idx)
+            self.ctrl.apply_send_gift(inv_key, self._selected_item_idx)
         except Exception as exc:
             QMessageBox.critical(self, "Error", f"Failed to send gift:\n{exc}")
             return
 
+        origin_tab = self._selected_inv_key
         self._selected_item_idx = None
         self._selected_btn = None
         self._clear_grid()
         self._clear_detail()
         self._hide_all_action_btns()
-        self._populate(self.ctrl.inv_items["Storage"])
+        if origin_tab == "Bank":
+            self._populate_bank()
+        else:
+            self._populate(self.ctrl.inv_items[origin_tab])
         QMessageBox.information(self, "Gift Sent", f"<b>{name}</b> sent to {ctx['recipient_name']}!")
 
     def _receive_gifts(self):

@@ -352,10 +352,9 @@ class _CatDetail(QScrollArea):
         h_lay.setContentsMargins(0, 0, 0, 4)
         h_lay.setSpacing(4)
 
-        # Name row: label + optional rename button
+        # Name row: cat name only (centered)
         name_row = QHBoxLayout()
         name_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        name_row.setSpacing(6)
 
         name_lbl = QLabel(cat.name or "(unknown)")
         name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -365,90 +364,65 @@ class _CatDetail(QScrollArea):
         )
         name_row.addWidget(name_lbl)
 
-        if self._ctrl is not None:
-            rename_btn = QPushButton("✏")
-            rename_btn.setFixedSize(28, 28)
-            rename_btn.setToolTip("Rename cat")
-            rename_btn.setStyleSheet(
-                "QPushButton { background: #222; border: 1px solid #555; border-radius: 4px;"
-                " color: #aaa; font-size: 13px; padding: 0; }"
-                "QPushButton:hover { background: #333; color: #fff; border-color: #888; }"
-                "QPushButton:pressed { background: #444; }"
-            )
-            rename_btn.clicked.connect(lambda: self._do_rename(cat))
-            name_row.addWidget(rename_btn)
-
-            # ── Bank / unbank button ─────────────────────────────────
-            if cat.status == "In House":
-                bank_btn = QPushButton("🏦")
-                bank_btn.setFixedSize(28, 28)
-                bank_btn.setToolTip("Send cat to the cat bank (removes it from the house)")
-                bank_btn.setStyleSheet(
-                    "QPushButton { background: #1a1a3a; border: 1px solid #5555aa; border-radius: 4px;"
-                    " color: #8888dd; font-size: 13px; padding: 0; }"
-                    "QPushButton:hover { background: #252550; color: #aaaaff; border-color: #7777cc; }"
-                    "QPushButton:pressed { background: #303060; }"
-                )
-                bank_btn.clicked.connect(lambda: self._do_bank(cat))
-                name_row.addWidget(bank_btn)
-            elif cat.status == "In Bank":
-                unbank_btn = QPushButton("🏠")
-                unbank_btn.setFixedSize(28, 28)
-                unbank_btn.setToolTip("Move cat back to the house")
-                unbank_btn.setStyleSheet(
-                    "QPushButton { background: #1a2a1a; border: 1px solid #4caf50; border-radius: 4px;"
-                    " color: #4caf50; font-size: 13px; padding: 0; }"
-                    "QPushButton:hover { background: #1e361e; color: #66cc66; border-color: #66cc66; }"
-                    "QPushButton:pressed { background: #244024; }"
-                )
-                unbank_btn.clicked.connect(lambda: self._do_unbank(cat))
-                name_row.addWidget(unbank_btn)
-
-            # ── Send cat gift button (only for "touchable" cats) ──────
-            if cat.status in ("In House", "In Bank"):
-                send_btn = QPushButton("🎁")
-                send_btn.setFixedSize(28, 28)
-                send_btn.setToolTip("Send this cat as a gift to your partner")
-                send_btn.setStyleSheet(
-                    "QPushButton { background: #2a1a1a; border: 1px solid #aa5555; border-radius: 4px;"
-                    " color: #dd8888; font-size: 13px; padding: 0; }"
-                    "QPushButton:hover { background: #3a2020; color: #ffaaaa; border-color: #cc7777; }"
-                    "QPushButton:pressed { background: #442828; }"
-                )
-                send_btn.clicked.connect(lambda: self._do_send_cat(cat))
-                name_row.addWidget(send_btn)
-
-            # ── Newborn-only actions ─────────────────────────────────
-            if getattr(cat, "age", None) == 1:
-                if cat.status == "In House":
-                    move_btn = QPushButton("📍")
-                    move_btn.setFixedSize(28, 28)
-                    move_btn.setToolTip("Move to a different room")
-                    move_btn.setStyleSheet(
-                        "QPushButton { background: #1a2a1a; border: 1px solid #3a8a3a; border-radius: 4px;"
-                        " color: #88cc88; font-size: 13px; padding: 0; }"
-                        "QPushButton:hover { background: #223022; color: #aaffaa; border-color: #55aa55; }"
-                        "QPushButton:pressed { background: #2a3a2a; }"
-                    )
-                    move_btn.clicked.connect(lambda: self._do_move_room(cat))
-                    name_row.addWidget(move_btn)
-
-                del_btn = QPushButton("🗑")
-                del_btn.setFixedSize(28, 28)
-                del_btn.setToolTip("Permanently delete this newborn")
-                del_btn.setStyleSheet(
-                    "QPushButton { background: #2a0a0a; border: 1px solid #992222; border-radius: 4px;"
-                    " color: #cc4444; font-size: 13px; padding: 0; }"
-                    "QPushButton:hover { background: #3a1010; color: #ff6666; border-color: #cc3333; }"
-                    "QPushButton:pressed { background: #4a1a1a; }"
-                )
-                del_btn.clicked.connect(lambda: self._do_delete_cat(cat))
-                name_row.addWidget(del_btn)
-
         name_row_w = QWidget()
         name_row_w.setStyleSheet("background: transparent;")
         name_row_w.setLayout(name_row)
         h_lay.addWidget(name_row_w)
+
+        # Action buttons row (labeled, like the ms_bar)
+        if self._ctrl is not None:
+            def _action_btn(label, border, bg, fg, hover_bg="#282828"):
+                b = QPushButton(label)
+                b.setStyleSheet(
+                    f"QPushButton {{ font-size: 11px; padding: 3px 10px;"
+                    f" border: 1px solid {border}; border-radius: 4px;"
+                    f" background: {bg}; color: {fg}; }}"
+                    f"QPushButton:hover {{ background: {hover_bg}; color: #fff; border-color: {fg}; }}"
+                    f"QPushButton:pressed {{ background: {border}44; }}"
+                )
+                return b
+
+            act_row = QHBoxLayout()
+            act_row.setContentsMargins(0, 2, 0, 2)
+            act_row.setSpacing(5)
+            act_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            # ── Rename ───────────────────────────────────────────────
+            rename_btn = _action_btn("✏ Rename", "#555555", "#222222", "#aaaaaa")
+            rename_btn.clicked.connect(lambda: self._do_rename(cat))
+            act_row.addWidget(rename_btn)
+
+            # ── Bank / Unbank ────────────────────────────────────────
+            if cat.status == "In House":
+                bank_btn = _action_btn("🏦 Bank", "#5555aa", "#1a1a3a", "#8888dd")
+                bank_btn.clicked.connect(lambda: self._do_bank(cat))
+                act_row.addWidget(bank_btn)
+            elif cat.status == "In Bank":
+                unbank_btn = _action_btn("🏠 Unbank", "#4caf50", "#1a2a1a", "#4caf50")
+                unbank_btn.clicked.connect(lambda: self._do_unbank(cat))
+                act_row.addWidget(unbank_btn)
+
+            # ── Gift ─────────────────────────────────────────────────
+            if cat.status in ("In House", "In Bank"):
+                send_btn = _action_btn("🎁 Gift", "#aa5555", "#2a1a1a", "#dd8888")
+                send_btn.clicked.connect(lambda: self._do_send_cat(cat))
+                act_row.addWidget(send_btn)
+
+            # ── Newborn-only actions ─────────────────────────────────
+            if getattr(cat, "age", None) == 1:
+                if cat.status == "In House":
+                    move_btn = _action_btn("📍 Move Room", "#3a8a3a", "#1a2a1a", "#88cc88")
+                    move_btn.clicked.connect(lambda: self._do_move_room(cat))
+                    act_row.addWidget(move_btn)
+
+                del_btn = _action_btn("🗑 Delete", "#992222", "#2a0a0a", "#cc4444")
+                del_btn.clicked.connect(lambda: self._do_delete_cat(cat))
+                act_row.addWidget(del_btn)
+
+            act_row_w = QWidget()
+            act_row_w.setStyleSheet("background: transparent;")
+            act_row_w.setLayout(act_row)
+            h_lay.addWidget(act_row_w)
 
         # Special flags
         flags_row = QHBoxLayout()
@@ -509,9 +483,6 @@ class _CatDetail(QScrollArea):
         self._layout.addWidget(header)
         self._layout.addWidget(_hsep())
 
-        if cat.room and cat.room not in (cat.status, ""):
-            self._layout.addWidget(_info_row("Room", cat.room))
-            self._layout.addWidget(_hsep())
 
         self._layout.addWidget(_section_label("📊  Stats"))
         self._layout.addWidget(self._build_stats_widget(cat))
@@ -568,14 +539,26 @@ class _CatDetail(QScrollArea):
             self._layout.addWidget(_hsep())
             if mutation_chip_items:
                 self._layout.addWidget(_section_label("🧬  Mutations"))
+                # The tooltip for each entry starts with 2 redundant lines:
+                #   "{Part} Mutation (ID N)"  ← same info as the title
+                #   "{name}"                  ← same as the title
+                # Strip them; keep only the stat details (line 3+).
+                mut_display = [
+                    (name, "\n".join(desc.split("\n")[2:]).strip() if desc else "")
+                    for name, desc in mutation_chip_items
+                ]
                 self._layout.addWidget(
-                    _ability_list(mutation_chip_items, "#131c26", "#80bbdd",
+                    _ability_list(mut_display, "#131c26", "#80bbdd",
                                   desc_color="#7aaacc", use_catalog=False)
                 )
             if defect_chip_items:
                 self._layout.addWidget(_section_label("⚡  Defects"))
+                def_display = [
+                    (name, "\n".join(desc.split("\n")[2:]).strip() if desc else "")
+                    for name, desc in defect_chip_items
+                ]
                 self._layout.addWidget(
-                    _ability_list(defect_chip_items, "#261c13", "#e0a030",
+                    _ability_list(def_display, "#261c13", "#e0a030",
                                   desc_color="#b07820", use_catalog=False)
                 )
 

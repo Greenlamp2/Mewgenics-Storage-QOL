@@ -1157,24 +1157,34 @@ class AppController:
         inventory.count -= 1
         self.save_inventories()
 
-    def apply_send_gift_multiple(self, indices: list[int]) -> int:
-        """Send multiple storage items as gifts in one DB transaction. Returns count sent."""
+    def apply_send_gift_multiple(self, indices: list[int], src_key: str = "storage") -> int:
+        """Send multiple items from *src_key* inventory as gifts in one DB transaction.
+
+        Returns count sent.  When *src_key* is ``"bank"``, the items' folder
+        assignments are also cleaned up from ``bank_folders``.
+        """
         from utils.gift_manager import send_gifts_batch
         ctx = self.get_gift_context()
         if not ctx["is_known_user"]:
             raise ValueError("Cannot determine gift recipient — save file user ID not recognized.")
 
-        storage      = self.inventories["storage"]
-        raws_to_send = [storage.raws[idx] for idx in indices]
+        inventory    = self.inventories[src_key]
+        raws_to_send = [inventory.raws[idx] for idx in indices]
 
         send_gifts_batch(raws_to_send, ctx["recipient_id"])
 
         for idx in sorted(indices, reverse=True):
-            del storage.raws[idx]
-            del storage.items[idx]
-            storage.count -= 1
+            if src_key == "bank":
+                seq_id = str(inventory.raws[idx].get("seqId", ""))
+                self.bank_folders["item_folders"].pop(seq_id, None)
+            del inventory.raws[idx]
+            del inventory.items[idx]
+            inventory.count -= 1
 
         self.save_inventories()
+        if src_key == "bank":
+            save_bank_folders(self.sav_path, self.bank_folders)
+        self._refresh_mtime()
         return len(indices)
 
     def apply_receive_gifts(self) -> list[dict]:
