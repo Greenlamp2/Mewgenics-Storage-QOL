@@ -324,7 +324,7 @@ class Cat:
 
     # ── Genealogy strip ──────────────────────────────────────────────────────
 
-    def strip_genealogy(self, current_day: int) -> None:
+    def strip_genealogy(self, current_day: int, patch_age: bool = True) -> None:
         """Zero-out all genealogy-related fields in the raw blob and reset
         in-memory relationship / lineage attributes.
 
@@ -336,6 +336,7 @@ class Cat:
           - lover / hater db_keys (u32 @ anchor+48, anchor+72) → 0
           - inbredness (f64 @ anchor+40) → 0.0
           - creation_day (near blob end) → ``current_day - 2``  (age = 2)
+            only when ``patch_age=True`` (default).
 
         In-memory fields reset:
           ``parent_a``, ``parent_b``, ``lovers``, ``haters``, ``children``,
@@ -361,16 +362,17 @@ class Cat:
         if anchor + 48 <= len(buf):
             struct.pack_into('<d', buf, anchor + 40, 0.0)
 
-        # ── Patch creation_day so age == 2 ──────────────────────────────────
-        target_creation = max(0, current_day - 2)
-        for offset_from_end in [103, 102, 104, 101, 105, 100, 106, 107, 108, 109, 110]:
-            pos = len(buf) - offset_from_end
-            if pos < 0 or pos + 4 > len(buf):
-                continue
-            creation_day = struct.unpack_from('<I', buf, pos)[0]
-            if 0 <= creation_day <= current_day:
-                struct.pack_into('<I', buf, pos, target_creation)
-                break
+        # ── Patch creation_day so age == 2 (only when requested) ────────────
+        if patch_age:
+            target_creation = max(0, current_day - 2)
+            for offset_from_end in [103, 102, 104, 101, 105, 100, 106, 107, 108, 109, 110]:
+                pos = len(buf) - offset_from_end
+                if pos < 0 or pos + 4 > len(buf):
+                    continue
+                creation_day = struct.unpack_from('<I', buf, pos)[0]
+                if 0 <= creation_day <= current_day:
+                    struct.pack_into('<I', buf, pos, target_creation)
+                    break
 
         self._raw = bytes(buf)
 
@@ -386,7 +388,8 @@ class Cat:
         self.children      = []
         self.generation    = 0
         self.inbredness    = 0.0
-        self.age           = 2
+        if patch_age:
+            self.age = 2
 
     # ── Rename ───────────────────────────────────────────────────────────────
 
