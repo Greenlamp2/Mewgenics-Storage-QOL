@@ -343,9 +343,9 @@ class AppController:
                 "Cannot determine gift recipient — save file user ID not recognized."
             )
 
-        # Strip genealogy tree before sending (age will be set by the recipient)
+        # Strip genealogy tree and reset age to 2 before sending
         current_day = int(self.save_properties.get("current_day") or 0)
-        cat.strip_genealogy(current_day, patch_age=False)
+        cat.strip_genealogy(current_day)
 
         # Upload the blob
         _send_cat(cat.to_blob(), recipient)
@@ -555,7 +555,7 @@ class AppController:
         bank_changed = False
         current_day  = int(self.save_properties.get("current_day") or 0)
         for cat in sendable:
-            cat.strip_genealogy(current_day, patch_age=False)
+            cat.strip_genealogy(current_day)
             _send_cat(cat.to_blob(), recipient)
             if cat.status == "In House":
                 self._house_state_entries.pop(cat.db_key, None)
@@ -592,18 +592,9 @@ class AppController:
             return []
 
         received: list = []
-        receiver_day = int(self.save_properties.get("current_day") or 0)
         for blob in blobs:
-            # Patch age to 2 using the receiver's current_day before saving
-            try:
-                tmp_cat = Cat(blob, 0, {}, set(), None)
-                tmp_cat.strip_genealogy(receiver_day, patch_age=True)
-                patched_blob = tmp_cat.to_blob()
-            except Exception:
-                patched_blob = blob  # fallback: use original blob as-is
-
-            # Allocate a new db_key and persist the (age-patched) cat blob
-            new_key = save_new_cat(self.sav_path, patched_blob)
+            # Allocate a new db_key and persist the cat blob
+            new_key = save_new_cat(self.sav_path, blob)
 
             # Build a minimal house_state entry so the cat can be unbanked later.
             # Format (40 bytes): [u32 cat_key][u32 0][u32 room_len=0][u32 0][24×0x00]
@@ -621,7 +612,7 @@ class AppController:
 
             # Parse the cat so it appears in the Cat Manager immediately
             try:
-                cat = Cat(patched_blob, new_key, {}, set(), receiver_day)
+                cat = Cat(blob, new_key, {}, set(), None)
                 cat.status = "In Bank"
                 cat.room   = ""
                 self.cats.append(cat)
