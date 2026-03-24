@@ -343,10 +343,6 @@ class AppController:
                 "Cannot determine gift recipient — save file user ID not recognized."
             )
 
-        # Strip genealogy tree and reset age to 2 before sending
-        current_day = int(self.save_properties.get("current_day") or 0)
-        cat.strip_genealogy(current_day)
-
         # Upload the blob
         _send_cat(cat.to_blob(), recipient)
 
@@ -592,9 +588,20 @@ class AppController:
             return []
 
         received: list = []
+        current_day = int(self.save_properties.get("current_day") or 0)
         for blob in blobs:
-            # Allocate a new db_key and persist the cat blob
-            new_key = save_new_cat(self.sav_path, blob)
+            # Parse first so we can patch the blob before writing to disk.
+            # strip_genealogy uses the RECEIVER's current_day so that age == 2
+            # in the blob that actually gets written to SQLite (and read by the game).
+            try:
+                cat_tmp = Cat(blob, 0, {}, set(), current_day)
+                cat_tmp.strip_genealogy(current_day)
+                clean_blob = cat_tmp.to_blob()
+            except Exception:
+                clean_blob = blob  # blob unreadable — save raw; visible after next full reload
+
+            # Allocate a new db_key and persist the patched blob
+            new_key = save_new_cat(self.sav_path, clean_blob)
 
             # Build a minimal house_state entry so the cat can be unbanked later.
             # Format (40 bytes): [u32 cat_key][u32 0][u32 room_len=0][u32 0][24×0x00]
@@ -610,15 +617,15 @@ class AppController:
                 'room_name':   '',
             }
 
-            # Parse the cat so it appears in the Cat Manager immediately
+            # Parse the final cat object from the clean blob for in-memory display
             try:
-                cat = Cat(blob, new_key, {}, set(), None)
+                cat = Cat(clean_blob, new_key, {}, set(), current_day)
                 cat.status = "In Bank"
                 cat.room   = ""
                 self.cats.append(cat)
                 received.append(cat)
             except Exception:
-                pass  # blob unreadable — still saved on disk, will appear after next full reload
+                pass  # still saved on disk, will appear after next full reload
 
         save_cat_bank(self.sav_path, self.cat_bank)
         self._refresh_mtime()

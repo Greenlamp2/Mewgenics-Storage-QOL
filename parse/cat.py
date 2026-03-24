@@ -296,23 +296,39 @@ class Cat:
 
         # Extract age from creation_day stored near the end of the blob (around blob_len - 103).
         # Search a small window around the typical offset to handle varying blob structures.
-        if current_day is not None:
-            try:
-                # Try positions from blob_len-100 to blob_len-110, preferring closer to -103
-                for offset_from_end in [103, 102, 104, 101, 105, 100, 106, 107, 108, 109, 110]:
+        # _pos_creation_day is stored so strip_genealogy can patch it directly without a
+        # fragile re-search that may fail when the blob comes from a save with a higher day.
+        self._pos_creation_day: int | None = None
+        _OFFSETS = [103, 102, 104, 101, 105, 100, 106, 107, 108, 109, 110]
+        try:
+            # Pass 1 (strict): creation_day must be in [0, current_day] with age in [0, 100]
+            if current_day is not None:
+                for offset_from_end in _OFFSETS:
                     pos = len(raw) - offset_from_end
                     if pos + 4 > len(raw) or pos < 0:
                         continue
                     creation_day = struct.unpack_from('<I', raw, pos)[0]
-                    # Valid creation_day should be between 0 and current_day
                     if 0 <= creation_day <= current_day:
                         age = current_day - creation_day
-                        # Accept if age is reasonable (0-100)
                         if 0 <= age <= 100:
                             self.age = age
+                            self._pos_creation_day = pos
                             break
-            except Exception:
-                pass
+
+            # Pass 2 (relaxed): any plausible day value in [0, 200000]; used when the blob
+            # comes from a save whose current_day exceeds ours (e.g., a received gift cat).
+            if self._pos_creation_day is None:
+                for offset_from_end in _OFFSETS:
+                    pos = len(raw) - offset_from_end
+                    if pos + 4 > len(raw) or pos < 0:
+                        continue
+                    val = struct.unpack_from('<I', raw, pos)[0]
+                    if 0 <= val <= 200_000:
+                        self._pos_creation_day = pos
+                        # Don't set self.age here — we don't know the true current_day
+                        break
+        except Exception:
+            pass
 
         self.parsed_age = self.age
         self.sexuality: str = "straight"  # bi / gay / straight — defaults to straight
@@ -362,20 +378,28 @@ class Cat:
             struct.pack_into('<d', buf, anchor + 40, 0.0)
 
         # ── Patch creation_day so age == 2 ──────────────────────────────────
+        # Use the position stored during parsing; fall back to a relaxed scan only
+        # if the object was constructed without a known current_day (e.g., legacy paths).
         target_creation = max(0, current_day - 2)
-        for offset_from_end in [103, 102, 104, 101, 105, 100, 106, 107, 108, 109, 110]:
-            pos = len(buf) - offset_from_end
-            if pos < 0 or pos + 4 > len(buf):
-                continue
-            creation_day = struct.unpack_from('<I', buf, pos)[0]
-            if 0 <= creation_day <= current_day:
-                struct.pack_into('<I', buf, pos, target_creation)
-                break
+        pos_cd = getattr(self, '_pos_creation_day', None)
+        if pos_cd is None:
+            # Relaxed fallback: find first plausible u32 in [0, 200000] near blob end
+            for offset_from_end in [103, 102, 104, 101, 105, 100, 106, 107, 108, 109, 110]:
+                pos = len(buf) - offset_from_end
+                if pos < 0 or pos + 4 > len(buf):
+                    continue
+                val = struct.unpack_from('<I', buf, pos)[0]
+                if 0 <= val <= 200_000:
+                    pos_cd = pos
+                    break
+        if pos_cd is not None and pos_cd + 4 <= len(buf):
+            struct.pack_into('<I', buf, pos_cd, target_creation)
+            self._pos_creation_day = pos_cd  # keep in sync
 
         self._raw = bytes(buf)
 
         # ── Reset in-memory relationship / lineage fields ────────────────────
-        self._parent_uid_a = 4294967297  # game's "no parent" sentinel
+        self._parent_uid_a = 0  # game's "no parent" sentinel
         self._parent_uid_b = 0
         self._lover_uids   = []
         self._hater_uids   = []
