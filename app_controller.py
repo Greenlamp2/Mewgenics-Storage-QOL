@@ -537,6 +537,41 @@ class AppController:
         self._refresh_mtime()
         return len(cats), total_gold
 
+    def apply_remove_disorder_bulk(self, disorder_name: str, cats: list | None = None) -> tuple[int, int]:
+        """Remove *disorder_name* from *cats* (defaults to all In-House + Adventure cats).
+
+        Writes the updated LZ4-compressed blob back to the ``cats`` SQLite
+        table for each modified cat.
+
+        Returns ``(n_modified, n_targeted)`` where *n_targeted* is the total
+        number of cats checked.
+        """
+        import sqlite3
+        targets = cats if cats is not None else [
+            c for c in self.cats
+            if c.status in ("In House", "Adventure")
+        ]
+        modified = 0
+        conn = sqlite3.connect(self.sav_path)
+        try:
+            for cat in targets:
+                if disorder_name not in getattr(cat, "disorders", []) and cat.name != 'Sydney':
+                    continue
+                if cat.remove_disorder_from_blob(disorder_name):
+                    new_blob = cat.to_blob()
+                    conn.execute(
+                        "UPDATE cats SET data=? WHERE key=?",
+                        (new_blob, cat.db_key),
+                    )
+                    modified += 1
+            if modified:
+                conn.commit()
+        finally:
+            conn.close()
+        if modified:
+            self._refresh_mtime()
+        return modified, len(targets)
+
     def apply_send_cats_multiple(self, cats: list) -> int:
         """Send multiple cats as gifts in one batch. Returns count sent."""
         from utils.gift_manager import send_cat as _send_cat, get_steam_id_from_path, get_recipient_id

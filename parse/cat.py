@@ -257,6 +257,9 @@ class Cat:
             self.passive_abilities = passives
             self.disorders = disorders
             self.equipment = []   # equipment parsing requires separate byte-marker logic
+            # if self.name == 'Princess':
+            if self.name == 'Sydney':
+                print('')
 
         else:
             # Fallback: old heuristic scan for any uppercase-starting ASCII string
@@ -293,7 +296,6 @@ class Cat:
         self.mutation_chip_items = [(text, tip) for text, tip, is_def in visual_items if not is_def]
         self.defects = defect_display_names
         self.defect_chip_items = [(text, tip) for text, tip, is_def in visual_items if is_def]
-
         # Extract age from creation_day stored near the end of the blob (around blob_len - 103).
         # Search a small window around the typical offset to handle varying blob structures.
         # _pos_creation_day is stored so strip_genealogy can patch it directly without a
@@ -411,6 +413,114 @@ class Cat:
         self.generation    = 0
         self.inbredness    = 0.0
         self.age           = 2
+
+    # ── Disorder removal ─────────────────────────────────────────────────────
+
+    def remove_disorder_from_blob(self, disorder_name: str) -> bool:
+        """Remove *disorder_name* from the raw blob by locating its disorder tail slot.
+
+        Mirrors the JS ``patchU64TierEntry(blob, recordOffset, byteLength, 'None', 1)``:
+        the matched slot is replaced with ``[u64:4]["None"][u32:1]`` — the same
+        placeholder the game itself writes for empty ability/disorder slots — so
+        the game renders nothing for that entry rather than showing a nameless passive.
+
+        The DefaultMove scan starts from ``_pos_stat_sec + 28`` (same origin as
+        ``__init__``) to avoid false positives inside the T-array / stat region.
+
+        Returns True if the disorder slot was found and patched, False otherwise.
+        """
+        raw = self._raw
+
+        # ── Re-locate DefaultMove run_start (start AFTER stat arrays) ────────
+        scan_start = self._pos_stat_sec + 7 * 4   # same origin as __init__
+        run_start = -1
+        for i in range(scan_start, len(raw) - 19):
+            lo = struct.unpack_from('<I', raw, i)[0]
+            hi = struct.unpack_from('<I', raw, i + 4)[0]
+            if hi != 0 or not (1 <= lo <= 96):
+                continue
+            try:
+                cand = raw[i + 8: i + 8 + lo].decode('ascii')
+                if cand == 'DefaultMove':
+                    run_start = i
+                    break
+            except Exception:
+                continue
+
+        if run_start == -1:
+            return False
+
+        # ── Skip the run ─────────────────────────────────────────────────────
+        r = BinaryReader(raw)
+        r.seek(run_start)
+        for _ in range(32):
+            saved = r.pos
+            item = r.str()
+            if item is None or not _IDENT_RE.match(item):
+                r.seek(saved)
+                break
+
+        # Skip passive1 tier (u32 immediately after the run)
+        try:
+            r.u32()
+        except Exception:
+            return False
+
+        # ── Collect byte ranges for the 3 tail entries ───────────────────────
+        # Each entry: [u64 str prefix + content][u32 tier]
+        # tail_idx 0 = Passive2, tail_idx 1 = Disorder1, tail_idx 2 = Disorder2
+        # We record (str_start, str_end, tier_end, value) for each.
+        tail_slots: list[tuple[int, int, int, str | None]] = []
+        for _ in range(3):
+            str_start = r.pos
+            try:
+                item = r.str()
+            except Exception:
+                break
+            str_end = r.pos
+            try:
+                r.u32()
+            except Exception:
+                tail_slots.append((str_start, str_end, str_end, item))
+                break
+            tier_end = r.pos   # str_end + 4
+            tail_slots.append((str_start, str_end, tier_end, item))
+
+        # ── Patch the first matching disorder slot (tail_idx 1 or 2) ─────────
+        # JS reference: patchU64TierEntry(blob, entry.offset, entry.byteLength, 'None', 1)
+        #   oldTotal  = 8 + byteLength + 4
+        #   newRecord = [u64:4]["None"][u32:1]  =  16 bytes
+        #   net shift = 16 - oldTotal = 4 - byteLength
+        FILLER = struct.pack('<Q', 4) + b'None' + struct.pack('<I', 1)   # 16 bytes
+
+        for tail_idx, (str_start, str_end, tier_end, item) in enumerate(tail_slots):
+            if tail_idx == 0:
+                continue   # Passive2 slot — do not touch
+            if item != disorder_name:
+                continue
+
+            content_len = (str_end - str_start) - 8   # bytes of the ASCII content
+            # old entry = 8 (prefix) + content_len + 4 (tier) bytes
+            # new entry = 16 bytes  →  blob shrinks by (content_len - 4)
+            net_shift = content_len - 4   # positive ⇒ blob shrinks
+
+            buf = bytearray(raw)
+            buf = buf[:str_start] + bytearray(FILLER) + buf[tier_end:]
+            self._raw = bytes(buf)
+
+            # Adjust the stored creation_day absolute offset
+            if net_shift != 0 and self._pos_creation_day is not None and self._pos_creation_day > str_start:
+                self._pos_creation_day -= net_shift
+
+            # Update in-memory disorder list
+            try:
+                self.disorders.remove(disorder_name)
+            except ValueError:
+                pass
+
+            return True
+
+        return False
 
     # ── Rename ───────────────────────────────────────────────────────────────
 
