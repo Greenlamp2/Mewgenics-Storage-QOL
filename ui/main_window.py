@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 from parse.item import Item, GhostItem
 from catalogs.itemcatalog import item_catalog
 from utils.loaders import RARITIES
-from app_controller import AppController, EXCLUDED_RARITIES
+from app_controller import AppController, EXCLUDED_RARITIES, PURCHASE_COST
 from version import APP_VERSION
 
 # mapping tab label → save_inventories key
@@ -633,6 +633,17 @@ class MainWindow(QMainWindow):
         )
         self.clone_to_storage_btn.clicked.connect(self._clone_to_storage)
 
+        self.purchase_pool_btn = QPushButton()
+        self.purchase_pool_btn.setVisible(False)
+        self.purchase_pool_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
+            " background: #00796b; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #00695c; }"
+            "QPushButton:pressed { background: #004d40; }"
+            "QPushButton:disabled { background: #2a2a2a; color: #555; }"
+        )
+        self.purchase_pool_btn.clicked.connect(self._purchase_pool_item)
+
         self.move_btn = QPushButton()
         self.move_btn.setVisible(False)
         self.move_btn.setStyleSheet(
@@ -684,6 +695,7 @@ class MainWindow(QMainWindow):
         detail_layout.addWidget(self.bank_to_trash_btn)
         detail_layout.addWidget(self.send_gift_btn)
         detail_layout.addWidget(self.clone_to_storage_btn)
+        detail_layout.addWidget(self.purchase_pool_btn)
         detail_layout.addStretch()
 
         splitter.addWidget(left_widget)
@@ -1110,6 +1122,7 @@ class MainWindow(QMainWindow):
         self.bank_to_trash_btn.setVisible(False)
         self.send_gift_btn.setVisible(False)
         self.clone_to_storage_btn.setVisible(False)
+        self.purchase_pool_btn.setVisible(False)
 
     def _refresh_sacrifice_all_btn(self):
         current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
@@ -1706,9 +1719,25 @@ class MainWindow(QMainWindow):
             self.clone_to_storage_btn.setVisible(
                 DEBUG_MODE and is_pool_tab and not is_locked
             )
+            # Purchase button — only in the Pool tab, only for discovered items with a known rarity
+            if is_pool_tab and not is_locked and rarity and rarity in self.ctrl.tokens:
+                token_count  = self.ctrl.tokens.get(rarity, 0)
+                rarity_label = rarity.replace("_", " ").capitalize()
+                self.purchase_pool_btn.setText(
+                    f"🛒 Purchase  ({PURCHASE_COST} {rarity_label} token{'s' if PURCHASE_COST != 1 else ''})"
+                )
+                self.purchase_pool_btn.setEnabled(token_count >= PURCHASE_COST)
+                self.purchase_pool_btn.setToolTip(
+                    f"Add this item to Storage for {PURCHASE_COST} {rarity_label} token(s).\n"
+                    f"You have: {token_count}"
+                )
+                self.purchase_pool_btn.setVisible(True)
+            else:
+                self.purchase_pool_btn.setVisible(False)
         elif is_bank_tab:
             # Bank tab: allow withdrawing to storage, trashing, or sending as gift
             self.clone_to_storage_btn.setVisible(False)
+            self.purchase_pool_btn.setVisible(False)
             self.sacrifice_btn.setVisible(False)
             self.repair_btn.setVisible(False)
             self.move_btn.setVisible(False)
@@ -1725,6 +1754,7 @@ class MainWindow(QMainWindow):
         else:
             self.clone_to_storage_btn.setVisible(False)
             self.bank_to_trash_btn.setVisible(False)
+            self.purchase_pool_btn.setVisible(False)
             token_label = (
                 rarity.replace("_", " ").capitalize()
                 if rarity in self.ctrl.tokens else "?"
@@ -2116,6 +2146,45 @@ class MainWindow(QMainWindow):
         if not self._confirm_if_save_changed():
             return
         self.ctrl.apply_clone_to_storage(self._selected_item_idx)
+
+    def _purchase_pool_item(self):
+        """Purchase the currently-selected pool item for PURCHASE_COST tokens."""
+        if self._selected_item_idx is None or self._selected_inv_key != "Pool":
+            return
+        if not self._confirm_if_save_changed():
+            return
+
+        item = self.ctrl.inv_items["Pool"][self._selected_item_idx]
+        rarity       = getattr(item, "rarity", None) or ""
+        rarity_label = rarity.replace("_", " ").capitalize()
+        name         = (getattr(item, "details", None) or {}).get("name_resolved") or item.name or "?"
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("🛒 Purchase Item")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(
+            f"Purchase <b>{name}</b> for "
+            f"<b>{PURCHASE_COST} {rarity_label} token{'s' if PURCHASE_COST != 1 else ''}</b>?<br><br>"
+            f"The item will be added to your <b>Storage</b>."
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.ctrl.apply_purchase_pool_item(item)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Cannot Purchase", str(exc))
+            return
+
+        self._sync_token_labels()
+        self._refresh_pool_tab_title()
+        # Refresh the pool grid (item may have moved from undiscovered → discovered)
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._populate(self.ctrl.inv_items["Pool"])
 
     def _send_gift(self):
         if self._selected_item_idx is None or self._selected_inv_key not in ("Storage", "Bank"):

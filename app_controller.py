@@ -26,6 +26,9 @@ POOL_NAME_BLACKLIST: frozenset = frozenset({
     "SoulJar_Full",
 })
 
+# Token cost to purchase one item directly from the pool
+PURCHASE_COST: int = 2
+
 
 class AppController:
     """Owns app state; exposes query and command methods for the UI to call."""
@@ -1278,4 +1281,78 @@ class AppController:
             self.inv_items["Pool"] = self.pool_items + self.undiscovered_pool_items
 
         return raw_items
+
+    # ------------------------------------------------------------------
+    # Pool purchase — buy an item directly from the pool with tokens
+    # ------------------------------------------------------------------
+
+    def apply_purchase_pool_item(self, item) -> bool:
+        """Purchase *item* from the pool for PURCHASE_COST tokens of its rarity.
+
+        Works for both discovered ``Item`` objects and undiscovered ``GhostItem``
+        objects.  For ghost items, a synthetic raw is created and the item is
+        auto-discovered in the pool.
+
+        Raises ``ValueError`` if the rarity is unknown or there are not enough tokens.
+        Returns ``True`` on success.
+        """
+        rarity = getattr(item, "rarity", None)
+        if not rarity or rarity not in self.tokens:
+            raise ValueError(
+                f"Cannot purchase: item has no valid rarity ({rarity!r})."
+            )
+        if self.tokens.get(rarity, 0) < PURCHASE_COST:
+            raise ValueError(
+                f"Not enough tokens: need {PURCHASE_COST} {rarity} tokens "
+                f"(you have {self.tokens.get(rarity, 0)})."
+            )
+
+        # Deduct cost
+        self.tokens[rarity] -= PURCHASE_COST
+
+        storage    = self.inventories["storage"]
+        new_seq_id = max((r.get("seqId", 0) for r in storage.raws), default=0) + 1
+
+        if isinstance(item, GhostItem):
+            # Synthesise a minimal valid raw for an undiscovered item
+            new_raw = {
+                "name":     item.name,
+                "subname":  "",
+                "charges":  -1,
+                "field1":   0,
+                "field2":   0,
+                "seqId":    new_seq_id,
+                "tailByte": 0,
+                "sep_flag": 1,
+            }
+            # Discover the item in the pool so it appears as discovered going forward
+            if item.name not in self.items_pool and item.name not in POOL_NAME_BLACKLIST:
+                self.items_pool[item.name] = new_raw
+                save_items_pool(self.items_pool)
+                self.pool_items = [Item(r) for r in self.items_pool.values()]
+                discovered_names = set(self.items_pool.keys())
+                all_catalog = item_catalog.get_all_non_quest_items()
+                self.undiscovered_pool_items = [
+                    GhostItem(n, details)
+                    for n, details in all_catalog.items()
+                    if n not in discovered_names
+                    and details is not None
+                    and details.get("rarity") not in EXCLUDED_RARITIES
+                    and details.get("rarity") is not None
+                ]
+                self.inv_items["Pool"] = self.pool_items + self.undiscovered_pool_items
+        else:
+            # Re-use the existing raw template from the pool
+            raw     = self.items_pool.get(item.name, {})
+            new_raw = {**raw, "seqId": new_seq_id}
+
+        storage.raws.append(new_raw)
+        storage.items.append(Item(new_raw))
+        storage.count += 1
+
+        self.save_inventories()
+        save_tokens(self.sav_path, self.tokens)
+        self._refresh_mtime()
+        return True
+
 
