@@ -268,6 +268,33 @@ class _CatCard(QFrame):
             badges_w.setLayout(badges_row)
             lay.addWidget(badges_w)
 
+        # ── Tag badges (only when cat has tags) ──────────────────────
+        cat_tags = getattr(cat, "tags", [])
+        if cat_tags:
+            tags_row = QHBoxLayout()
+            tags_row.setSpacing(2)
+            tags_row.setContentsMargins(0, 0, 0, 0)
+            tags_row.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+            for tag in cat_tags[:3]:  # show at most 3 tags to keep card compact
+                t_lbl = QLabel(f"🏷 {tag}")
+                t_lbl.setStyleSheet(
+                    "color: #80e0a0; font-size: 9px; background: #0e2018;"
+                    " border: 1px solid #2a6040; border-radius: 3px; padding: 1px 3px;"
+                )
+                t_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                tags_row.addWidget(t_lbl)
+            if len(cat_tags) > 3:
+                more_lbl = QLabel(f"+{len(cat_tags) - 3}")
+                more_lbl.setStyleSheet(
+                    "color: #60b080; font-size: 9px; background: #0a1810;"
+                    " border: 1px solid #1a4030; border-radius: 3px; padding: 1px 3px;"
+                )
+                tags_row.addWidget(more_lbl)
+            tags_w = QWidget()
+            tags_w.setStyleSheet("background: transparent;")
+            tags_w.setLayout(tags_row)
+            lay.addWidget(tags_w)
+
     def update_name(self):
         """Refresh the displayed name from the underlying cat object."""
         self._name_lbl.setText(self._cat.name or "(unknown)")
@@ -327,6 +354,8 @@ class _CatDetail(QScrollArea):
     deleted = Signal(object, int, int)
     # Emitted after a disorder is removed from the displayed cat
     disorder_removed = Signal(object)   # emits Cat
+    # Emitted after cat tags are modified
+    tagged  = Signal(object)   # emits Cat
 
     def __init__(self, ctrl=None, parent=None):
         super().__init__(parent)
@@ -585,6 +614,9 @@ class _CatDetail(QScrollArea):
                 )
 
         self._layout.addWidget(_hsep())
+        self._layout.addWidget(_section_label("🏷  Tags"))
+        self._layout.addWidget(self._build_tags_widget(cat))
+        self._layout.addWidget(_hsep())
         self._layout.addWidget(_section_label("👨‍👩‍👧  Family"))
         pa = cat.parent_a.name if cat.parent_a else "—"
         pb = cat.parent_b.name if cat.parent_b else "—"
@@ -776,6 +808,106 @@ class _CatDetail(QScrollArea):
             return
         self.deleted.emit(cat, new_count, gold)
 
+    # ── Tag management ────────────────────────────────────────────────
+
+    def _build_tags_widget(self, cat) -> QWidget:
+        """Build a widget showing current tags with remove buttons + an Add button."""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+
+        tags = list(getattr(cat, "tags", []))
+
+        if tags:
+            tags_row = QHBoxLayout()
+            tags_row.setSpacing(4)
+            tags_row.setContentsMargins(0, 0, 0, 0)
+            tags_row.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            for tag in tags:
+                pill = QWidget()
+                pill.setStyleSheet(
+                    "background: #0e2018; border: 1px solid #2a6040; border-radius: 4px;"
+                )
+                pill_lay = QHBoxLayout(pill)
+                pill_lay.setContentsMargins(5, 2, 2, 2)
+                pill_lay.setSpacing(3)
+                tag_lbl = QLabel(f"🏷 {tag}")
+                tag_lbl.setStyleSheet(
+                    "color: #80e0a0; font-size: 11px; background: transparent; border: none;"
+                )
+                pill_lay.addWidget(tag_lbl)
+                rm_btn = QPushButton("×")
+                rm_btn.setFixedSize(16, 16)
+                rm_btn.setStyleSheet(
+                    "QPushButton { background: transparent; border: none; color: #60a070;"
+                    " font-size: 12px; font-weight: bold; padding: 0; }"
+                    "QPushButton:hover { color: #ff6060; }"
+                )
+                rm_btn.clicked.connect(lambda _=False, t=tag, c=cat: self._do_remove_tag(c, t))
+                pill_lay.addWidget(rm_btn)
+                tags_row.addWidget(pill)
+            tags_w = QWidget()
+            tags_w.setStyleSheet("background: transparent;")
+            tags_w.setLayout(tags_row)
+            lay.addWidget(tags_w)
+        else:
+            no_lbl = QLabel("No tags")
+            no_lbl.setStyleSheet("color: #555; font-size: 11px; background: transparent;")
+            lay.addWidget(no_lbl)
+
+        add_btn = QPushButton("＋ Add Tag")
+        add_btn.setStyleSheet(
+            "QPushButton { font-size: 10px; padding: 2px 8px; border: 1px solid #2a6040;"
+            " border-radius: 4px; background: #0e2018; color: #60b080; }"
+            "QPushButton:hover { background: #162a20; color: #80e0a0; }"
+        )
+        add_btn.clicked.connect(lambda: self._do_add_tag(cat))
+        lay.addWidget(add_btn)
+        return w
+
+    def _do_add_tag(self, cat) -> None:
+        """Open a dialog to add a new tag to *cat*."""
+        if self._ctrl is None:
+            return
+        # Build list of existing tags for suggestions
+        existing_all = self._ctrl.get_all_cat_tags()
+        current      = list(getattr(cat, "tags", []))
+        suggestions  = [t for t in existing_all if t not in current]
+
+        from PySide6.QtWidgets import QInputDialog
+        dlg = QInputDialog(self)
+        dlg.setWindowTitle("Add Tag")
+        dlg.setLabelText(f"Tag for {cat.name}:")
+        dlg.setComboBoxEditable(True)
+        dlg.setComboBoxItems(suggestions)
+        dlg.setMinimumWidth(300)
+        if not dlg.exec():
+            return
+        tag = dlg.textValue().strip()
+        if not tag:
+            return
+        try:
+            self._ctrl.apply_add_cat_tag(cat, tag)
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+            return
+        self.show_cat(cat)
+        self.tagged.emit(cat)
+
+    def _do_remove_tag(self, cat, tag: str) -> None:
+        """Remove *tag* from *cat* after confirmation."""
+        if self._ctrl is None:
+            return
+        try:
+            self._ctrl.apply_remove_cat_tag(cat, tag)
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+            return
+        self.show_cat(cat)
+        self.tagged.emit(cat)
+
     # ── builders ─────────────────────────────────────────────────────
 
     @staticmethod
@@ -857,6 +989,7 @@ class CatManagerWindow(QWidget):
         self._sub_filter       = "all"   # mutation/disorder sub-filter for the "newborns" tab
         self._gender_filter    = "all"   # gender sub-filter for the "newborns" tab
         self._sexuality_filter = "all"   # sexuality sub-filter for the "newborns" tab
+        self._tag_filter       = "all"   # tag filter for the "bank" tab
         _btn_style_active = (
             "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #4caf50;"
             " border-radius: 4px; background: #1a2d1a; color: #4caf50; font-weight: bold; }"
@@ -1080,7 +1213,25 @@ class CatManagerWindow(QWidget):
 
         self._sub_filter_bar.hide()
 
-        # ── Splitter: list | detail ───────────────────────────────────
+        # ── Bank tag filter bar (hidden unless "bank" tab active) ────
+        self._bank_tag_bar = QWidget()
+        self._bank_tag_bar.setStyleSheet(
+            "QWidget { background: #0e1a18; border-bottom: 1px solid #2a4030; }"
+        )
+        btb_lay = QHBoxLayout(self._bank_tag_bar)
+        btb_lay.setContentsMargins(10, 4, 10, 4)
+        btb_lay.setSpacing(6)
+        btb_lbl = QLabel("Filter by tag:")
+        btb_lbl.setStyleSheet("color: #60a070; font-size: 11px; background: transparent;")
+        btb_lay.addWidget(btb_lbl)
+        # The actual tag buttons are rebuilt dynamically via _rebuild_bank_tag_bar()
+        self._bank_tag_btns_container = QWidget()
+        self._bank_tag_btns_container.setStyleSheet("background: transparent;")
+        self._bank_tag_btns_layout = QHBoxLayout(self._bank_tag_btns_container)
+        self._bank_tag_btns_layout.setContentsMargins(0, 0, 0, 0)
+        self._bank_tag_btns_layout.setSpacing(4)
+        btb_lay.addWidget(self._bank_tag_btns_container, 1)
+        self._bank_tag_bar.hide()
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self._list_container = QWidget()
@@ -1103,6 +1254,7 @@ class CatManagerWindow(QWidget):
         self._detail.moved.connect(self._on_cat_moved)
         self._detail.deleted.connect(self._on_cat_deleted)
         self._detail.disorder_removed.connect(self._on_cat_disorder_removed)
+        self._detail.tagged.connect(self._on_cat_tagged)
 
         # ── Multi-select action bar (hidden until cats are selected) ─
         self._ms_bar = QWidget()
@@ -1134,18 +1286,21 @@ class CatManagerWindow(QWidget):
         self._ms_move_room_btn = _ms_btn("📍 Move Room",  "#3a8a3a", "#0e1a0e", "#88cc88")
         self._ms_gift_btn      = _ms_btn("🎁 Gift",       "#aa5555", "#2a1a1a", "#ff9999")
         self._ms_delete_btn    = _ms_btn("🗑 Delete",     "#992222", "#2a0a0a", "#cc4444")
+        self._ms_tag_btn       = _ms_btn("🏷 Tag",        "#2a6040", "#0a1810", "#60b080")
 
         self._ms_bank_btn.clicked.connect(self._ms_do_bank)
         self._ms_unbank_btn.clicked.connect(self._ms_do_unbank)
         self._ms_move_room_btn.clicked.connect(self._ms_do_move_room)
         self._ms_gift_btn.clicked.connect(self._ms_do_send_gift)
         self._ms_delete_btn.clicked.connect(self._ms_do_delete)
+        self._ms_tag_btn.clicked.connect(self._ms_do_tag)
 
         ms_lay.addWidget(self._ms_bank_btn)
         ms_lay.addWidget(self._ms_unbank_btn)
         ms_lay.addWidget(self._ms_move_room_btn)
         ms_lay.addWidget(self._ms_gift_btn)
         ms_lay.addWidget(self._ms_delete_btn)
+        ms_lay.addWidget(self._ms_tag_btn)
 
         clear_ms_btn = QPushButton("✕")
         clear_ms_btn.setFixedSize(22, 22)
@@ -1177,6 +1332,7 @@ class CatManagerWindow(QWidget):
         root_lay.setSpacing(0)
         root_lay.addWidget(filter_bar)
         root_lay.addWidget(self._sub_filter_bar)
+        root_lay.addWidget(self._bank_tag_bar)
         root_lay.addWidget(splitter, 1)
 
         self._rebuild_list()
@@ -1205,9 +1361,15 @@ class CatManagerWindow(QWidget):
         # Show/hide sub-filter bar
         if key == "newborns":
             self._sub_filter_bar.show()
+            self._bank_tag_bar.hide()
             self._refresh_kill_counter()
+        elif key == "bank":
+            self._sub_filter_bar.hide()
+            self._bank_tag_bar.show()
+            self._rebuild_bank_tag_bar()
         else:
             self._sub_filter_bar.hide()
+            self._bank_tag_bar.hide()
             # Reset all sub-filters so they're clean next time
             self._sub_filter       = "all"
             self._gender_filter    = "all"
@@ -1257,13 +1419,82 @@ class CatManagerWindow(QWidget):
             )
         self._rebuild_list()
 
+    def _rebuild_bank_tag_bar(self):
+        """Rebuild the tag buttons in the bank tag filter bar from current cat tags."""
+        # Clear old buttons
+        while self._bank_tag_btns_layout.count():
+            item = self._bank_tag_btns_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Collect all tags from banked cats
+        all_tags: list[str] = []
+        seen: set[str] = set()
+        for cat in self._cats:
+            if cat.status == "In Bank":
+                for t in getattr(cat, "tags", []):
+                    if t not in seen:
+                        all_tags.append(t)
+                        seen.add(t)
+        all_tags.sort()
+
+        _tag_active = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #4caf80;"
+            " border-radius: 4px; background: #0e2a18; color: #4cef90; font-weight: bold; }"
+        )
+        _tag_normal = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #2a4030;"
+            " border-radius: 4px; background: #0a1810; color: #60a070; }"
+            "QPushButton:hover { background: #102018; color: #80e0a0; }"
+        )
+
+        # "All" button
+        all_btn = QPushButton("🐱 All")
+        all_btn.setStyleSheet(_tag_active if self._tag_filter == "all" else _tag_normal)
+        all_btn.clicked.connect(lambda: self._set_tag_filter("all"))
+        self._bank_tag_btns_layout.addWidget(all_btn)
+
+        # "No Tags" button — fixed special value, always shown
+        _notag_active = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #886644;"
+            " border-radius: 4px; background: #221808; color: #ccaa66; font-weight: bold; }"
+        )
+        _notag_normal = (
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #443322;"
+            " border-radius: 4px; background: #141008; color: #886644; }"
+            "QPushButton:hover { background: #1e1610; color: #ccaa66; }"
+        )
+        notag_btn = QPushButton("🚫 No Tags")
+        notag_btn.setStyleSheet(_notag_active if self._tag_filter == "__no_tags__" else _notag_normal)
+        notag_btn.clicked.connect(lambda: self._set_tag_filter("__no_tags__"))
+        self._bank_tag_btns_layout.addWidget(notag_btn)
+
+        for tag in all_tags:
+            btn = QPushButton(f"🏷 {tag}")
+            btn.setStyleSheet(_tag_active if self._tag_filter == tag else _tag_normal)
+            btn.clicked.connect(lambda _=False, t=tag: self._set_tag_filter(t))
+            self._bank_tag_btns_layout.addWidget(btn)
+
+        self._bank_tag_btns_layout.addStretch()
+
+    def _set_tag_filter(self, tag: str):
+        """Set the active tag filter for the bank view and rebuild the list."""
+        self._tag_filter = tag
+        self._rebuild_bank_tag_bar()
+        self._rebuild_list()
+
     def _filtered_cats(self) -> list:
         if self._filter == "house":
             return [c for c in self._cats if c.status == "In House"]
         if self._filter == "adventure":
             return [c for c in self._cats if c.status == "Adventure"]
         if self._filter == "bank":
-            return [c for c in self._cats if c.status == "In Bank"]
+            banked = [c for c in self._cats if c.status == "In Bank"]
+            if self._tag_filter == "__no_tags__":
+                banked = [c for c in banked if not getattr(c, "tags", [])]
+            elif self._tag_filter != "all":
+                banked = [c for c in banked if self._tag_filter in getattr(c, "tags", [])]
+            return banked
         if self._filter == "newborns":
             babies = [
                 c for c in self._cats
@@ -1427,12 +1658,14 @@ class CatManagerWindow(QWidget):
             self._ms_move_room_btn.setVisible(has_house)
             self._ms_gift_btn.setVisible(has_house or has_bank)
             self._ms_delete_btn.setVisible(True)
+            self._ms_tag_btn.setVisible(False)
         else:
             self._ms_bank_btn.setVisible(is_house)
             self._ms_unbank_btn.setVisible(is_bank)
             self._ms_move_room_btn.setVisible(is_house)
             self._ms_gift_btn.setVisible(is_house or is_bank)
             self._ms_delete_btn.setVisible(False)
+            self._ms_tag_btn.setVisible(is_bank)
 
         self._ms_bar.show()
 
@@ -1686,6 +1919,109 @@ class CatManagerWindow(QWidget):
         if total_gold:
             msg += f"<br>🪙 <b>+{total_gold} gold</b> rewarded!"
         QMessageBox.information(self, "Done", msg)
+
+    def _ms_do_tag(self):
+        """Open a bulk tag dialog for all currently ms-selected cats."""
+        cats = list(self._ms_selected)
+        if not cats or self._ctrl is None:
+            return
+
+        from PySide6.QtWidgets import (
+            QDialog, QVBoxLayout, QLabel, QLineEdit,
+            QDialogButtonBox, QCheckBox
+        )
+
+        # Collect current tags across selected cats
+        all_tags_in_use: list[str] = self._ctrl.get_all_cat_tags()
+        # Per-cat tags: tags that ALL selected cats have vs. tags that SOME have
+        all_sets = [set(getattr(c, "tags", [])) for c in cats]
+        common_tags = set.intersection(*all_sets) if all_sets else set()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"🏷 Tag {len(cats)} cat(s)")
+        dlg.setMinimumWidth(320)
+        dlg.setStyleSheet("QDialog { background: #1a1a1a; color: #ddd; }")
+        dlg_lay = QVBoxLayout(dlg)
+        dlg_lay.setSpacing(10)
+
+        info_lbl = QLabel(
+            f"Manage tags for <b>{len(cats)}</b> cat(s).<br>"
+            "Checked tags will be <b>added</b> to all; unchecked will be <b>removed</b>."
+        )
+        info_lbl.setWordWrap(True)
+        info_lbl.setStyleSheet("color: #aaa; font-size: 11px; background: transparent;")
+        dlg_lay.addWidget(info_lbl)
+
+        # Checkboxes for existing tags
+        checkboxes: list[QCheckBox] = []
+        if all_tags_in_use:
+            tags_lbl = QLabel("Existing tags:")
+            tags_lbl.setStyleSheet("color: #80e0a0; font-size: 11px; background: transparent;")
+            dlg_lay.addWidget(tags_lbl)
+            for tag in all_tags_in_use:
+                cb = QCheckBox(tag)
+                cb.setStyleSheet("color: #ddd; font-size: 11px;")
+                cb.setChecked(tag in common_tags)
+                cb.setProperty("tag_name", tag)
+                dlg_lay.addWidget(cb)
+                checkboxes.append(cb)
+
+        # New tag input
+        new_lbl = QLabel("New tag (optional):")
+        new_lbl.setStyleSheet("color: #80e0a0; font-size: 11px; background: transparent;")
+        dlg_lay.addWidget(new_lbl)
+        new_edit = QLineEdit()
+        new_edit.setStyleSheet(
+            "QLineEdit { background: #111; border: 1px solid #2a6040; border-radius: 4px;"
+            " color: #ccc; padding: 3px 6px; }"
+        )
+        new_edit.setPlaceholderText("Type a new tag name…")
+        dlg_lay.addWidget(new_edit)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.setStyleSheet("color: #ccc;")
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        dlg_lay.addWidget(btns)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        add_tags: list[str]    = []
+        remove_tags: list[str] = []
+        for cb in checkboxes:
+            tag = cb.property("tag_name")
+            if cb.isChecked():
+                add_tags.append(tag)
+            else:
+                remove_tags.append(tag)
+
+        new_tag = new_edit.text().strip()
+        if new_tag:
+            add_tags.append(new_tag)
+
+        if not add_tags and not remove_tags:
+            return
+
+        try:
+            modified = self._ctrl.apply_set_cats_tags_bulk(cats, add_tags, remove_tags)
+        except Exception as exc:
+            QMessageBox.critical(self, "Tag Error", str(exc))
+            return
+
+        self._rebuild_list()
+        self._rebuild_bank_tag_bar()
+        if self._active_card is not None:
+            self._detail.show_cat(self._active_card._cat)
+        QMessageBox.information(self, "Tags Updated", f"Tags updated for <b>{modified}</b> cat(s).")
+
+    def _on_cat_tagged(self, cat):
+        """Called after a tag is added/removed from the detail panel."""
+        self._rebuild_list()
+        self._rebuild_bank_tag_bar()
+        self._reselect_cat(cat)
 
     def _refresh_kill_counter(self):
         """Update the kill counter label in the sub-filter bar."""

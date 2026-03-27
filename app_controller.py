@@ -13,10 +13,10 @@ from catalogs.itemcatalog import item_catalog
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, \
     load_save_properties, load_cats_count, load_bank_inventory, load_bank_folders, SAVE_INFO_KEYS, \
     load_house_state_raw, load_adventure_keys, load_cats, load_pedigree, \
-    load_current_day, load_cat_bank, load_newborn_kills
+    load_current_day, load_cat_bank, load_newborn_kills, load_cat_tags
 from utils.savers import save_inventories as _save_inventories, save_tokens, \
     save_bank_inventory, save_items_pool, save_bank_folders, save_house_state, \
-    save_cat_bank, save_new_cat, save_newborn_kills, save_gold as _save_gold
+    save_cat_bank, save_new_cat, save_newborn_kills, save_gold as _save_gold, save_cat_tags
 
 # Rarities that should never appear in any view
 EXCLUDED_RARITIES = {"sidequest", "quest"}
@@ -50,6 +50,8 @@ class AppController:
         self.cats: list = []
         # Cat bank (maps db_key → {'entry_bytes': bytes, 'room_name': str})
         self.cat_bank: dict = {}
+        # Cat tags (maps db_key → [list of tag strings]), persisted in custom table
+        self.cat_tags: dict[int, list[str]] = {}
         # house_state round-trip helpers (set by load_data / apply_bank_cat / apply_unbank_cat)
         self._house_state_prefix:  bytes = b'\x00\x00\x00\x00'
         self._house_state_entries: dict  = {}  # {cat_key: raw_entry_bytes} currently in house_state
@@ -142,6 +144,7 @@ class AppController:
         ped_map                 = load_pedigree(self.sav_path)
         current_day             = load_current_day(self.sav_path)
         self.newborn_kill_count = load_newborn_kills(self.sav_path)
+        self.cat_tags           = load_cat_tags(self.sav_path)
 
         cats: list = []
         for key, blob in raw_cats:
@@ -210,6 +213,10 @@ class AppController:
             if cat.db_key in self.cat_bank:
                 cat.status = "In Bank"
                 cat.room   = self.cat_bank[cat.db_key].get('room_name', '')
+
+        # Inject persisted tags into each cat
+        for cat in cats:
+            cat.tags = list(self.cat_tags.get(cat.db_key, []))
 
         self.cats = cats
 
@@ -675,6 +682,77 @@ class AppController:
             self.loaded_mtime = os.path.getmtime(self.sav_path)
         except OSError:
             pass
+
+    # ------------------------------------------------------------------
+    # Cat tags
+    # ------------------------------------------------------------------
+
+    def get_all_cat_tags(self) -> list[str]:
+        """Return a sorted list of all unique tags currently assigned to any cat."""
+        tags: set[str] = set()
+        for cat in self.cats:
+            tags.update(getattr(cat, "tags", []))
+        return sorted(tags)
+
+    def apply_add_cat_tag(self, cat, tag: str) -> None:
+        """Add *tag* to *cat*, persist to the save file."""
+        tag = tag.strip()
+        if not tag:
+            return
+        existing = list(self.cat_tags.get(cat.db_key, []))
+        if tag not in existing:
+            existing.append(tag)
+            self.cat_tags[cat.db_key] = existing
+            cat.tags = existing
+            save_cat_tags(self.sav_path, self.cat_tags)
+            self._refresh_mtime()
+
+    def apply_remove_cat_tag(self, cat, tag: str) -> None:
+        """Remove *tag* from *cat*, persist to the save file."""
+        existing = list(self.cat_tags.get(cat.db_key, []))
+        if tag in existing:
+            existing.remove(tag)
+            if existing:
+                self.cat_tags[cat.db_key] = existing
+            else:
+                self.cat_tags.pop(cat.db_key, None)
+            cat.tags = existing
+            save_cat_tags(self.sav_path, self.cat_tags)
+            self._refresh_mtime()
+
+    def apply_set_cats_tags_bulk(self, cats: list, add_tags: list[str],
+                                  remove_tags: list[str]) -> int:
+        """Add *add_tags* and remove *remove_tags* for all cats in the list.
+
+        Returns the number of cats modified.
+        """
+        add_tags    = [t.strip() for t in add_tags    if t.strip()]
+        remove_tags = [t.strip() for t in remove_tags if t.strip()]
+        if not add_tags and not remove_tags:
+            return 0
+        modified = 0
+        for cat in cats:
+            existing = list(self.cat_tags.get(cat.db_key, []))
+            changed  = False
+            for t in remove_tags:
+                if t in existing:
+                    existing.remove(t)
+                    changed = True
+            for t in add_tags:
+                if t not in existing:
+                    existing.append(t)
+                    changed = True
+            if changed:
+                if existing:
+                    self.cat_tags[cat.db_key] = existing
+                else:
+                    self.cat_tags.pop(cat.db_key, None)
+                cat.tags = existing
+                modified += 1
+        if modified:
+            save_cat_tags(self.sav_path, self.cat_tags)
+            self._refresh_mtime()
+        return modified
 
     def get_save_date_str(self) -> str:
         """Return a human-readable last-modified timestamp for the save file."""

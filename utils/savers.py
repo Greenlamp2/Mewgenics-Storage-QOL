@@ -245,3 +245,22 @@ def save_cat_bank(path: str, cat_bank: dict) -> None:
     conn.close()
 
 
+_CAT_TAGS_KEY = "cat_tags_v1"
+
+def save_cat_tags(path: str, cat_tags: dict) -> None:
+    """Persist cat tags to the ``custom`` table.
+
+    cat_tags: {db_key (int): [list of tag strings]}
+    Only non-empty tag lists are stored.
+    """
+    data = {str(k): v for k, v in cat_tags.items() if v}
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE IF NOT EXISTS custom (key TEXT PRIMARY KEY, data TEXT)")
+    conn.execute(
+        "INSERT OR REPLACE INTO custom (key, data) VALUES (?, ?)",
+        (_CAT_TAGS_KEY, json.dumps(data, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+
+

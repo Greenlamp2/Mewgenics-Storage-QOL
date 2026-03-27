@@ -1,4 +1,4 @@
-APP_VERSION = "v1.9.0"
+APP_VERSION = "v1.9.1"
 
 # Set this to your actual GitHub repository (owner/repo) so the launcher
 # can check for new releases via the GitHub Releases API.

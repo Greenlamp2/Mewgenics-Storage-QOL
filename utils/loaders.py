@@ -342,6 +342,31 @@ def load_items_pool():
 
 BANK_FOLDERS_KEY = "bank_folders_v1"
 
+CAT_TAGS_KEY = "cat_tags_v1"
+
+def load_cat_tags(path: str) -> dict:
+    """Load cat tags from the ``custom`` table.
+
+    Returns {db_key (int): [list of tag strings]}.
+    """
+    if not os.path.exists(path):
+        return {}
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE IF NOT EXISTS custom (key TEXT PRIMARY KEY, data TEXT)")
+        conn.commit()
+        row = conn.execute(
+            "SELECT data FROM custom WHERE key=?", (CAT_TAGS_KEY,)
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            data = json.loads(row[0])
+            return {int(k): v for k, v in data.items() if isinstance(v, list)}
+    except Exception:
+        pass
+    return {}
+
+
 def load_bank_folders(sav_path: str) -> dict:
     """Load the bank folder structure from the SQLite custom table.
 
