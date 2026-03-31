@@ -1568,6 +1568,7 @@ class MainWindow(QMainWindow):
         btn.setToolTip(tooltip)
         btn.setCheckable(True)
         btn.setProperty("item_rarity", rarity)
+        btn.setProperty("item_name", item.name or "")
         btn.setStyleSheet(
             f"QToolButton {{ border: 2px solid transparent; border-radius: 4px; background: {bg}; }}"
             "QToolButton:checked { border: 2px solid #4a9eff; }"
@@ -2308,13 +2309,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Cannot Purchase", str(exc))
             return
 
+        item_name = item.name  # save before grid rebuild
         self._sync_token_labels()
         self._refresh_pool_tab_title()
         # Refresh the pool grid (item may have moved from undiscovered → discovered)
         self._clear_grid()
-        self._clear_detail()
-        self._hide_all_action_btns()
         self._populate(self.ctrl.inv_items["Pool"])
+        # Re-select the same item so the detail stays open and the player can buy again
+        self._reselect_item_by_name(item_name)
 
     def _send_gift(self):
         if self._selected_item_idx is None or self._selected_inv_key not in ("Storage", "Bank"):
@@ -2394,6 +2396,18 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # UI helpers
     # ------------------------------------------------------------------
+
+    def _reselect_item_by_name(self, name: str):
+        """After a grid rebuild, find and click the button whose item_name matches."""
+        from PySide6.QtWidgets import QToolButton as _TB
+        for i in range(self.grid.count()):
+            gi = self.grid.itemAt(i)
+            if gi is None:
+                continue
+            w = gi.widget()
+            if isinstance(w, _TB) and w.property("item_name") == name:
+                w.click()
+                return
 
     def _sync_token_labels(self):
         """Refresh all token count labels from controller state."""
