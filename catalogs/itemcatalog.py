@@ -89,6 +89,21 @@ class ItemCatalog:
     def get_price(self, rarity):
         return prices.get(rarity, "0")
 
+    def get_armor_set_data(self, name: str) -> dict | None:
+        """Return {kind, set, desc_resolved} for an armor-set item, or None."""
+        url = resource_path('data/items/armor_sets.json')
+        try:
+            items = json.loads(open(url, encoding="utf-8").read())
+            entry = items.get(name)
+            if entry is None:
+                return None
+            return {
+                'kind': entry.get('kind'),
+                'set': entry.get('set'),
+            }
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
     def get_all_non_quest_items(self) -> dict:
         """Return {name: details_dict} for every non-quest item (cached)."""
         if not hasattr(self, '_all_items_cache'):

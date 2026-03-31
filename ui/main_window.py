@@ -1695,6 +1695,10 @@ class MainWindow(QMainWindow):
             lines.append(f'<b>Rarity:</b> <span style="color:{color}">{rarity.capitalize()}</span>')
         cat = item.category or ("quest" if item.is_quest_item else "—")
         lines.append(f"<b>Category:</b> {cat}")
+        if getattr(item, 'is_armor_set', False):
+            _set_name = getattr(item, 'armor_set_name', None)
+            if _set_name:
+                lines.append(f'<b>Set:</b> <span style="color:#a78bfa">⚔ {_set_name}</span>')
         if item.charges != -1:
             lines.append(f"<b>Charges:</b> {item.charges}")
         if item.subname:

@@ -4,6 +4,8 @@ from catalogs.itemcatalog import item_catalog
 class Item:
     def __init__(self, itemdict, trash=False):
         self.is_quest_item = False
+        self.is_armor_set = False
+        self.armor_set_name = None
         self.category = None
 
         self.name = itemdict.get('name')
@@ -22,7 +24,18 @@ class Item:
     def complete(self):
         self.is_quest_item = item_catalog.is_quest_item(self.name)
         self.category = item_catalog.get_category(self.name)
-        self.details = item_catalog.get_item_full('quest' if self.is_quest_item else self.category, self.name)
+        # ── Armor-set enrichment ──────────────────────────────────────────────
+        self.is_armor_set = self.category == 'armor_sets'
+        if self.is_armor_set:
+            _asd = item_catalog.get_armor_set_data(self.name)
+            if _asd:
+                self.category = _asd['kind'] or self.category
+                self.armor_set_name = _asd['set']
+        # ─────────────────────────────────────────────────────────────────────
+        self.details = item_catalog.get_item_full(
+            'quest' if self.is_quest_item else ('armor_sets' if self.is_armor_set else self.category),
+            self.name
+        )
         self.ability = self.details.get('ability', None)
         if self.ability is not None:
             self.ability_details = item_catalog.get_item_ability(self.ability)
@@ -59,6 +72,15 @@ class GhostItem:
         self.name     = name
         self.details  = details or {}
         self.category = item_catalog.get_category(name)
+        # ── Armor-set enrichment ──────────────────────────────────────────────
+        self.is_armor_set = self.category == 'armor_sets'
+        self.armor_set_name = None
+        if self.is_armor_set:
+            _asd = item_catalog.get_armor_set_data(name)
+            if _asd:
+                self.category = _asd['kind'] or self.category
+                self.armor_set_name = _asd['set']
+        # ─────────────────────────────────────────────────────────────────────
 
         icon_name_raw = self.details.get("name_resolved") or self.details.get("desc")
         self.icon_name = item_catalog.solve_icon_name(icon_name_raw) if icon_name_raw else None
