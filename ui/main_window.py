@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QFrame, QSplitter,
     QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton, QMessageBox,
-    QApplication, QStackedWidget, QInputDialog, QMenu,
+    QApplication, QStackedWidget, QInputDialog, QMenu, QComboBox,
 )
 
 from parse.item import Item, GhostItem
@@ -379,6 +379,7 @@ class MainWindow(QMainWindow):
         self._multi_selection: dict[int, QToolButton] = {}
         self._bank_folder_id: str | None = None   # None = bank root
         self._bank_drag_filters: list = []         # hold refs to prevent GC
+        self._pool_set_filter: str = ""            # "" = all sets
 
         self.ctrl.load_data()
         self._build_ui()
@@ -435,6 +436,32 @@ class MainWindow(QMainWindow):
             self._sort_btns[key] = btn
             sort_layout.addWidget(btn)
         sort_layout.addStretch()
+
+        # ── Pool set filter (visible only on Pool tab) ────────────────
+        self._pool_set_sep = QFrame()
+        self._pool_set_sep.setFrameShape(QFrame.Shape.VLine)
+        self._pool_set_sep.setStyleSheet("QFrame { color: #444; }")
+        self._pool_set_sep.setVisible(False)
+        sort_layout.addWidget(self._pool_set_sep)
+
+        _pool_set_lbl = QLabel("Set:")
+        _pool_set_lbl.setStyleSheet("font-size: 11px; color: #aaa;")
+        self._pool_set_lbl = _pool_set_lbl
+        self._pool_set_lbl.setVisible(False)
+        sort_layout.addWidget(self._pool_set_lbl)
+
+        self._pool_set_combo = QComboBox()
+        self._pool_set_combo.setMinimumWidth(130)
+        self._pool_set_combo.setStyleSheet(
+            "QComboBox { font-size: 11px; padding: 1px 6px; border: 1px solid #555;"
+            " border-radius: 3px; background: #2d2d2d; color: #ccc; }"
+            "QComboBox::drop-down { border: none; }"
+            "QComboBox QAbstractItemView { background: #2d2d2d; color: #ccc;"
+            " selection-background-color: #1a3a5c; }"
+        )
+        self._pool_set_combo.setVisible(False)
+        self._pool_set_combo.currentTextChanged.connect(self._on_pool_set_filter_changed)
+        sort_layout.addWidget(self._pool_set_combo)
 
         self.sacrifice_all_btn = QPushButton("✦ Sacrifice All → Tokens")
         self.sacrifice_all_btn.setVisible(False)
@@ -1358,6 +1385,18 @@ class MainWindow(QMainWindow):
         self._refresh_sacrifice_all_btn()
         self._refresh_multi_bar()
         label = self._tab_key(self.tab_bar.tabText(index))
+
+        # Show set-filter combo only on Pool tab
+        _is_pool = (label == "Pool")
+        self._pool_set_sep.setVisible(_is_pool)
+        self._pool_set_lbl.setVisible(_is_pool)
+        self._pool_set_combo.setVisible(_is_pool)
+        if _is_pool:
+            self._refresh_pool_set_combo()
+        else:
+            # Reset filter when leaving Pool
+            self._pool_set_filter = ""
+
         if label == "Save Info":
             self._content_stack.setCurrentIndex(1)
             self._refresh_save_info()
@@ -1370,6 +1409,35 @@ class MainWindow(QMainWindow):
             self._content_stack.setCurrentIndex(0)
             self._bank_nav_bar.setVisible(False)
             self._populate(self.ctrl.inv_items[label])
+
+    def _refresh_pool_set_combo(self):
+        """Repopulate the set filter combo with all armor sets present in the pool."""
+        pool_items = self.ctrl.inv_items.get("Pool", [])
+        sets = sorted({
+            s
+            for item in pool_items
+            if getattr(item, 'is_armor_set', False)
+            for s in (getattr(item, 'armor_set_name', None) or [])
+            if isinstance(s, str) and s
+        })
+        prev = self._pool_set_combo.currentText()
+        self._pool_set_combo.blockSignals(True)
+        self._pool_set_combo.clear()
+        self._pool_set_combo.addItem("All Sets")
+        for s in sets:
+            self._pool_set_combo.addItem(s)
+        idx = self._pool_set_combo.findText(prev)
+        self._pool_set_combo.setCurrentIndex(max(0, idx))
+        self._pool_set_combo.blockSignals(False)
+        # Restore the stored filter value
+        self._pool_set_filter = "" if self._pool_set_combo.currentText() == "All Sets" else self._pool_set_combo.currentText()
+
+    def _on_pool_set_filter_changed(self, text: str):
+        self._pool_set_filter = "" if text == "All Sets" else text
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._populate(self.ctrl.inv_items["Pool"])
 
     def _clear_grid(self):
         self._selected_btn = None
@@ -1474,6 +1542,13 @@ class MainWindow(QMainWindow):
             (i, item) for i, item in enumerate(items)
             if (item.details or {}).get("rarity") not in EXCLUDED_RARITIES
         ]
+
+        # ── Pool set filter ───────────────────────────────────────────
+        if self._pool_set_filter:
+            indexed = [
+                (i, it) for i, it in indexed
+                if self._pool_set_filter in (getattr(it, 'armor_set_name', None) or [])
+            ]
 
         discovered = self._sorted_indexed(
             [(i, it) for i, it in indexed if not getattr(it, "locked", False)]
@@ -1696,9 +1771,14 @@ class MainWindow(QMainWindow):
         cat = item.category or ("quest" if item.is_quest_item else "—")
         lines.append(f"<b>Category:</b> {cat}")
         if getattr(item, 'is_armor_set', False):
-            _set_name = getattr(item, 'armor_set_name', None)
-            if _set_name:
-                lines.append(f'<b>Set:</b> <span style="color:#a78bfa">⚔ {_set_name}</span>')
+            _set_names = getattr(item, 'armor_set_name', None) or []
+            for _sn in (_set_names if isinstance(_set_names, list) else [_set_names]):
+                if not _sn:
+                    continue
+                lines.append(f'<b>Set:</b> <span style="color:#a78bfa">⚔ {_sn}</span>')
+                _bonus = item_catalog.get_set_bonus(_sn)
+                if _bonus:
+                    lines.append(f'<span style="color:#c4b5fd"><i>{_bonus}</i></span>')
         if item.charges != -1:
             lines.append(f"<b>Charges:</b> {item.charges}")
         if item.subname:

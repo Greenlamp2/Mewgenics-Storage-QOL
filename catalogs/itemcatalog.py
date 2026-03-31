@@ -90,19 +90,40 @@ class ItemCatalog:
         return prices.get(rarity, "0")
 
     def get_armor_set_data(self, name: str) -> dict | None:
-        """Return {kind, set, desc_resolved} for an armor-set item, or None."""
+        """Return {kind, set: list[str], desc_resolved} for an armor-set item, or None."""
         url = resource_path('data/items/armor_sets.json')
         try:
             items = json.loads(open(url, encoding="utf-8").read())
             entry = items.get(name)
             if entry is None:
                 return None
+            set_val = entry.get('set')
+            if isinstance(set_val, list):
+                set_names = [s.rstrip(', ').strip() for s in set_val if s]
+            elif isinstance(set_val, str):
+                set_names = [set_val.strip()] if set_val.strip() else []
+            else:
+                set_names = []
             return {
                 'kind': entry.get('kind'),
-                'set': entry.get('set'),
+                'set': set_names,          # always list[str]
+                'desc_resolved': entry.get('desc_resolved'),
             }
         except (FileNotFoundError, json.JSONDecodeError):
             return None
+
+    def get_set_bonus(self, set_name: str) -> str | None:
+        """Return the desc_resolved bonus text for a set name, or None."""
+        if not hasattr(self, '_set_bonuses_cache'):
+            url = resource_path('json/item_setbonuses.json')
+            try:
+                self._set_bonuses_cache = json.loads(open(url, encoding="utf-8").read())
+            except (FileNotFoundError, json.JSONDecodeError):
+                self._set_bonuses_cache = {}
+        entry = self._set_bonuses_cache.get(set_name)
+        if entry is None:
+            return None
+        return entry.get('desc_resolved')
 
     def get_all_non_quest_items(self) -> dict:
         """Return {name: details_dict} for every non-quest item (cached)."""
