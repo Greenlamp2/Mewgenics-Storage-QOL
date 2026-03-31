@@ -380,6 +380,7 @@ class MainWindow(QMainWindow):
         self._bank_folder_id: str | None = None   # None = bank root
         self._bank_drag_filters: list = []         # hold refs to prevent GC
         self._pool_set_filter: str = ""            # "" = all sets
+        self._pool_set_only:   bool = False        # True = show only armor-set items
 
         self.ctrl.load_data()
         self._build_ui()
@@ -438,6 +439,22 @@ class MainWindow(QMainWindow):
         sort_layout.addStretch()
 
         # ── Pool set filter (visible only on Pool tab) ────────────────
+        _pool_set_btn_base = (
+            "QPushButton { font-size: 11px; padding: 2px 8px;"
+            " border: 1px solid #5a3080; border-radius: 3px; background: #2d2d2d; color: #a78bfa; }"
+            "QPushButton:hover { background: #3d2a50; }"
+        )
+        _pool_set_btn_active = (
+            "QPushButton { font-size: 11px; font-weight: bold; padding: 2px 8px;"
+            " border: 1px solid #a78bfa; border-radius: 3px; background: #3d1f6d; color: #a78bfa; }"
+        )
+        self._pool_set_btn_styles = (_pool_set_btn_base, _pool_set_btn_active)
+        self._pool_set_btn = QPushButton("⚔ Set")
+        self._pool_set_btn.setVisible(False)
+        self._pool_set_btn.setStyleSheet(_pool_set_btn_base)
+        self._pool_set_btn.clicked.connect(self._on_pool_set_btn_clicked)
+        sort_layout.addWidget(self._pool_set_btn)
+
         self._pool_set_sep = QFrame()
         self._pool_set_sep.setFrameShape(QFrame.Shape.VLine)
         self._pool_set_sep.setStyleSheet("QFrame { color: #444; }")
@@ -1386,16 +1403,24 @@ class MainWindow(QMainWindow):
         self._refresh_multi_bar()
         label = self._tab_key(self.tab_bar.tabText(index))
 
-        # Show set-filter combo only on Pool tab
+        # Show set-filter controls only on Pool tab
         _is_pool = (label == "Pool")
-        self._pool_set_sep.setVisible(_is_pool)
-        self._pool_set_lbl.setVisible(_is_pool)
-        self._pool_set_combo.setVisible(_is_pool)
+        self._pool_set_btn.setVisible(_is_pool)
         if _is_pool:
             self._refresh_pool_set_combo()
+            # Restore combo visibility to match current toggle state
+            _combo_vis = self._pool_set_only
+            self._pool_set_sep.setVisible(_combo_vis)
+            self._pool_set_lbl.setVisible(_combo_vis)
+            self._pool_set_combo.setVisible(_combo_vis)
         else:
-            # Reset filter when leaving Pool
+            # Reset all pool filters when leaving
+            self._pool_set_only = False
             self._pool_set_filter = ""
+            self._pool_set_btn.setStyleSheet(self._pool_set_btn_styles[0])
+            self._pool_set_sep.setVisible(False)
+            self._pool_set_lbl.setVisible(False)
+            self._pool_set_combo.setVisible(False)
 
         if label == "Save Info":
             self._content_stack.setCurrentIndex(1)
@@ -1409,6 +1434,25 @@ class MainWindow(QMainWindow):
             self._content_stack.setCurrentIndex(0)
             self._bank_nav_bar.setVisible(False)
             self._populate(self.ctrl.inv_items[label])
+
+    def _on_pool_set_btn_clicked(self):
+        self._pool_set_only = not self._pool_set_only
+        base, active = self._pool_set_btn_styles
+        self._pool_set_btn.setStyleSheet(active if self._pool_set_only else base)
+        # Show/hide the combo when toggling
+        self._pool_set_sep.setVisible(self._pool_set_only)
+        self._pool_set_lbl.setVisible(self._pool_set_only)
+        self._pool_set_combo.setVisible(self._pool_set_only)
+        if not self._pool_set_only:
+            # Reset specific-set filter when turning off
+            self._pool_set_filter = ""
+            self._pool_set_combo.blockSignals(True)
+            self._pool_set_combo.setCurrentIndex(0)
+            self._pool_set_combo.blockSignals(False)
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._populate(self.ctrl.inv_items["Pool"])
 
     def _refresh_pool_set_combo(self):
         """Repopulate the set filter combo with all armor sets present in the pool."""
@@ -1544,6 +1588,8 @@ class MainWindow(QMainWindow):
         ]
 
         # ── Pool set filter ───────────────────────────────────────────
+        if self._pool_set_only:
+            indexed = [(i, it) for i, it in indexed if getattr(it, 'is_armor_set', False)]
         if self._pool_set_filter:
             indexed = [
                 (i, it) for i, it in indexed
