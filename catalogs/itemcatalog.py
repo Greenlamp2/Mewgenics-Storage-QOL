@@ -115,7 +115,7 @@ class ItemCatalog:
     def get_set_bonus(self, set_name: str) -> str | None:
         """Return the desc_resolved bonus text for a set name, or None."""
         if not hasattr(self, '_set_bonuses_cache'):
-            url = resource_path('json/item_setbonuses.json')
+            url = resource_path('data/item_setbonuses.json')
             try:
                 self._set_bonuses_cache = json.loads(open(url, encoding="utf-8").read())
             except (FileNotFoundError, json.JSONDecodeError):
