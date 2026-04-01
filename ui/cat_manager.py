@@ -1484,50 +1484,15 @@ class CatManagerWindow(QWidget):
         self._rebuild_list()
 
     def _filtered_cats(self) -> list:
-        if self._filter == "house":
-            return [c for c in self._cats if c.status == "In House"]
-        if self._filter == "adventure":
-            return [c for c in self._cats if c.status == "Adventure"]
-        if self._filter == "bank":
-            banked = [c for c in self._cats if c.status == "In Bank"]
-            if self._tag_filter == "__no_tags__":
-                banked = [c for c in banked if not getattr(c, "tags", [])]
-            elif self._tag_filter != "all":
-                banked = [c for c in banked if self._tag_filter in getattr(c, "tags", [])]
-            return banked
-        if self._filter == "newborns":
-            babies = [
-                c for c in self._cats
-                if getattr(c, "age", None) == 1 and c.status == "In House"
-            ]
-            # ── Mutation / disorder sub-filter ────────────────────────
-            sf = self._sub_filter
-            if sf == "defects":
-                babies = [c for c in babies if getattr(c, "disorders", [])]
-            elif sf != "all":
-                mut_count = lambda c: len(getattr(c, "mutation_chip_items", []))
-                if sf == "lt8":
-                    babies = [c for c in babies if mut_count(c) < 8]
-                elif sf == "eq8":
-                    babies = [c for c in babies if mut_count(c) == 8]
-                elif sf == "eq9":
-                    babies = [c for c in babies if mut_count(c) == 9]
-                elif sf == "eq10":
-                    babies = [c for c in babies if mut_count(c) == 10]
-            # ── Gender sub-filter ─────────────────────────────────────
-            gf = self._gender_filter
-            if gf == "male":
-                babies = [c for c in babies if c.gender == "male"]
-            elif gf == "female":
-                babies = [c for c in babies if c.gender == "female"]
-            elif gf == "ditto":
-                babies = [c for c in babies if c.gender == "?"]
-            # ── Sexuality sub-filter ──────────────────────────────────
-            sxf = self._sexuality_filter
-            if sxf != "all":
-                babies = [c for c in babies if getattr(c, "sexuality", "straight") == sxf]
-            return babies
-        return list(self._cats)
+        from utils.cat_filters import filter_cats
+        return filter_cats(
+            self._cats,
+            self._filter,
+            sub_filter=self._sub_filter,
+            gender_filter=self._gender_filter,
+            sexuality_filter=self._sexuality_filter,
+            tag_filter=self._tag_filter,
+        )
 
     # ── List ─────────────────────────────────────────────────────────
 
