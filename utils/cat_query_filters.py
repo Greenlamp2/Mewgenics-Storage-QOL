@@ -324,6 +324,21 @@ _STRING_ATTR_MAP: dict[str, tuple[str, str]] = {
     FilterType.ROOM.value:      ("room",      ""),
 }
 
+# Room key → human-readable display name.
+# Must stay in sync with ui/cat_manager.py::ROOM_DISPLAY_NAMES.
+_ROOM_DISPLAY_NAMES: dict[str, str] = {
+    "Floor1_Large": "RDC Gauche",
+    "Floor1_Small": "RDC Droite",
+    "Floor2_Small": "Etage Gauche",
+    "Floor2_Large": "Etage Droite",
+    "Attic":        "Grenier",
+}
+
+
+def _room_to_display(room: str) -> str:
+    """Translate an internal room key to its display name (falls back to the key)."""
+    return _ROOM_DISPLAY_NAMES.get(room, room)
+
 
 def _get_list_field(cat: Any, filter_type: str) -> list:
     """Return the list field of *cat* for *filter_type*.
@@ -348,12 +363,17 @@ def _get_count_field(cat: Any, filter_type: str) -> int:
 def _get_str_field(cat: Any, filter_type: str) -> str:
     """Return the string field of *cat* for *filter_type*.
 
+    For the ``room`` field the internal room key is translated to its
+    human-readable display name (e.g. ``"Attic"`` → ``"Grenier"``).
     Missing attributes fall back to their documented default value.
     """
     attr, default = _STRING_ATTR_MAP.get(filter_type, (None, ""))
     if attr is None:
         return ""
-    return str(getattr(cat, attr, default) or default)
+    value = str(getattr(cat, attr, default) or default)
+    if filter_type == FilterType.ROOM.value:
+        value = _room_to_display(value)
+    return value
 
 
 # ---------------------------------------------------------------------------

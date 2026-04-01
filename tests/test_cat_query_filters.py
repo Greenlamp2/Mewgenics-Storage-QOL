@@ -377,6 +377,58 @@ class TestStringFieldFiltering:
         result = filter_cats_query(cats, _block(FilterType.ROOM, Operator.CONTAINS, "Chamber"))
         assert _names(result) == ["A"]
 
+    def test_room_display_name_grenier(self):
+        """cat.room == 'Attic' must match filter value 'Grenier' after translation."""
+        cat = _cat(name="AtticCat", room="Attic")
+        result = filter_cats_query([cat], _block(FilterType.ROOM, Operator.EQ, "Grenier"))
+        assert len(result) == 1
+
+    def test_room_display_name_rdc_gauche(self):
+        cat = _cat(name="A", room="Floor1_Large")
+        result = filter_cats_query([cat], _block(FilterType.ROOM, Operator.EQ, "RDC Gauche"))
+        assert len(result) == 1
+
+    def test_room_display_name_rdc_droite(self):
+        cat = _cat(name="A", room="Floor1_Small")
+        result = filter_cats_query([cat], _block(FilterType.ROOM, Operator.EQ, "RDC Droite"))
+        assert len(result) == 1
+
+    def test_room_display_name_etage_gauche(self):
+        cat = _cat(name="A", room="Floor2_Small")
+        result = filter_cats_query([cat], _block(FilterType.ROOM, Operator.EQ, "Etage Gauche"))
+        assert len(result) == 1
+
+    def test_room_display_name_etage_droite(self):
+        cat = _cat(name="A", room="Floor2_Large")
+        result = filter_cats_query([cat], _block(FilterType.ROOM, Operator.EQ, "Etage Droite"))
+        assert len(result) == 1
+
+    def test_room_raw_key_does_not_match_display_name_filter(self):
+        """After translation 'Attic' becomes 'Grenier'; filtering by 'Attic' should NOT match."""
+        cat = _cat(name="A", room="Attic")
+        result = filter_cats_query([cat], _block(FilterType.ROOM, Operator.EQ, "Attic"))
+        assert result == []
+
+    def test_room_unknown_key_matches_itself(self):
+        """Unknown room keys fall back to the raw key for comparisons."""
+        cat = _cat(name="A", room="CustomRoom")
+        result = filter_cats_query([cat], _block(FilterType.ROOM, Operator.EQ, "CustomRoom"))
+        assert len(result) == 1
+
+    def test_room_ne_with_display_name(self):
+        cats = [_cat(name="A", room="Attic"), _cat(name="B", room="Floor1_Large")]
+        result = filter_cats_query(cats, _block(FilterType.ROOM, Operator.NE, "Grenier"))
+        assert _names(result) == ["B"]
+
+    def test_room_contains_display_name_substring(self):
+        """CONTAINS is case-insensitive and works on translated display names."""
+        cats = [
+            _cat(name="A", room="Floor1_Large"),   # → "RDC Gauche"
+            _cat(name="B", room="Floor2_Large"),   # → "Etage Droite"
+        ]
+        result = filter_cats_query(cats, _block(FilterType.ROOM, Operator.CONTAINS, "Gauche"))
+        assert _names(result) == ["A"]
+
 
 # ===========================================================================
 # 4. AND logical combinations

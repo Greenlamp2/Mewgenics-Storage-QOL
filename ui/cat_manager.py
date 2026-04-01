@@ -8,6 +8,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
     QSplitter, QPushButton, QGridLayout, QInputDialog, QMessageBox,
+    QComboBox, QLineEdit, QSpinBox,
 )
 
 from catalogs.stat_catalog import STAT_NAMES
@@ -35,6 +36,59 @@ STAT_DISPLAY_COLORS = {
     "STR": "#e05050", "DEX": "#50c050", "CON": "#6090e0",
     "INT": "#c0a030", "SPD": "#a060d0", "CHA": "#e08040", "LCK": "#50c0c0",
 }
+
+# ------------------------------------------------------------------
+# Query-builder UI constants
+# ------------------------------------------------------------------
+
+_FILTER_TYPE_LABELS: dict[str, str] = {
+    "abilities":      "⚔️ Abilities",
+    "passives":       "● Passives",
+    "mutation":       "🧬 Mutation name",
+    "mutation_count": "🧬 Mutation count",
+    "gender":         "♂♀ Gender",
+    "sexuality":      "💕 Sexuality",
+    "defects":        "⚡ Defect name",
+    "defects_count":  "⚡ Defect count",
+    "disorder":       "⚠ Disorder",
+    "room":           "🏠 Room",
+}
+
+_OPERATOR_LABELS: dict[str, str] = {
+    "contains":     "contains",
+    "not_contains": "not contains",
+    "any_of":       "any of (comma-sep)",
+    "none_of":      "none of (comma-sep)",
+    "is_empty":     "is empty",
+    "is_not_empty": "is not empty",
+    "eq":  "=",
+    "ne":  "≠",
+    "lt":  "<",
+    "lte": "≤",
+    "gt":  ">",
+    "gte": "≥",
+}
+
+# Fields whose value input is a fixed dropdown instead of a text box
+_STRING_FIELD_CHOICES: dict[str, list[str]] = {
+    "gender":    ["male", "female", "?"],
+    "sexuality": ["straight", "gay", "bi"],
+}
+
+# Operators that take no value input at all
+_NO_VALUE_OPERATORS: frozenset[str] = frozenset({"is_empty", "is_not_empty"})
+
+
+def _get_query_presets_path() -> str:
+    """Return the path to cat_query_presets.json in the custom save folder."""
+    try:
+        from utils.save_manager import CUSTOM_FOLDER
+        if CUSTOM_FOLDER:
+            return os.path.join(CUSTOM_FOLDER, "cat_query_presets.json")
+    except Exception:
+        pass
+    return ""
+
 
 # ------------------------------------------------------------------
 # Ability description lookup
@@ -956,6 +1010,580 @@ def _hsep() -> QFrame:
 
 
 # ------------------------------------------------------------------
+# Query-builder: single filter row
+# ------------------------------------------------------------------
+
+class _FilterBlockRow(QFrame):
+    """One condition row: [field type] [operator] [value] [× remove]."""
+
+    removed = Signal(object)   # emits self
+    changed = Signal()
+
+    _COMBO_SS = (
+        "QComboBox { font-size: 11px; padding: 2px 5px; border: 1px solid #3a3a4a;"
+        " border-radius: 3px; background: #14141e; color: #ccc; min-height: 20px; }"
+        "QComboBox:hover { border-color: #5555aa; }"
+        "QComboBox::drop-down { border: none; width: 16px; }"
+        "QComboBox QAbstractItemView { background: #1a1a2a; color: #ccc;"
+        " border: 1px solid #3a3a5a; selection-background-color: #2a2a4a; }"
+    )
+    _INPUT_SS = (
+        "QLineEdit { font-size: 11px; padding: 2px 5px; border: 1px solid #3a3a4a;"
+        " border-radius: 3px; background: #14141e; color: #ccc; }"
+        "QLineEdit:focus { border-color: #5555aa; }"
+    )
+    _SPIN_SS = (
+        "QSpinBox { font-size: 11px; padding: 2px 4px; border: 1px solid #3a3a4a;"
+        " border-radius: 3px; background: #14141e; color: #ccc; }"
+        "QSpinBox::up-button, QSpinBox::down-button { width: 14px; }"
+    )
+
+    def __init__(self, block=None, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(
+            "QFrame { background: #14141e; border: 1px solid #2a2a3a; border-radius: 4px; }"
+        )
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(6, 4, 4, 4)
+        lay.setSpacing(4)
+
+        # Field-type combo
+        self._type_cb = QComboBox()
+        self._type_cb.setStyleSheet(self._COMBO_SS)
+        self._type_cb.setMinimumWidth(148)
+        for ft_val, ft_label in _FILTER_TYPE_LABELS.items():
+            self._type_cb.addItem(ft_label, ft_val)
+
+        # Operator combo
+        self._op_cb = QComboBox()
+        self._op_cb.setStyleSheet(self._COMBO_SS)
+        self._op_cb.setMinimumWidth(128)
+
+        # Value widget holder (swapped dynamically)
+        self._val_holder = QWidget()
+        self._val_holder.setStyleSheet("background: transparent;")
+        self._val_holder.setMinimumWidth(120)
+        self._val_lay = QHBoxLayout(self._val_holder)
+        self._val_lay.setContentsMargins(0, 0, 0, 0)
+        self._val_lay.setSpacing(0)
+        self._val_w: QWidget | None = None
+
+        # Remove button
+        rm = QPushButton("×")
+        rm.setFixedSize(20, 20)
+        rm.setStyleSheet(
+            "QPushButton { background: #1e0e0e; border: 1px solid #553333;"
+            " border-radius: 3px; color: #cc5555; font-size: 13px;"
+            " font-weight: bold; padding: 0; }"
+            "QPushButton:hover { background: #2a1010; color: #ff7777; }"
+        )
+        rm.clicked.connect(lambda: self.removed.emit(self))
+
+        lay.addWidget(self._type_cb)
+        lay.addWidget(self._op_cb)
+        lay.addWidget(self._val_holder, 1)
+        lay.addWidget(rm)
+
+        self._type_cb.currentIndexChanged.connect(self._on_type_changed)
+        self._op_cb.currentIndexChanged.connect(self._on_op_changed)
+
+        if block is not None:
+            self._load_block(block)
+        else:
+            self._on_type_changed()
+
+    # ── Loading ──────────────────────────────────────────────────────
+
+    def _load_block(self, block) -> None:
+        idx = self._type_cb.findData(block.filter_type)
+        if idx >= 0:
+            self._type_cb.blockSignals(True)
+            self._type_cb.setCurrentIndex(idx)
+            self._type_cb.blockSignals(False)
+        self._rebuild_op_combo(block.filter_type)
+        idx = self._op_cb.findData(block.operator)
+        if idx >= 0:
+            self._op_cb.blockSignals(True)
+            self._op_cb.setCurrentIndex(idx)
+            self._op_cb.blockSignals(False)
+        self._rebuild_val_widget(block.filter_type, block.operator, block.value)
+
+    # ── Slots ────────────────────────────────────────────────────────
+
+    def _on_type_changed(self) -> None:
+        ft = self._type_cb.currentData()
+        self._rebuild_op_combo(ft)
+        self._rebuild_val_widget(ft, self._op_cb.currentData())
+        self.changed.emit()
+
+    def _on_op_changed(self) -> None:
+        ft = self._type_cb.currentData()
+        op = self._op_cb.currentData()
+        self._rebuild_val_widget(ft, op)
+        self.changed.emit()
+
+    # ── Rebuilders ───────────────────────────────────────────────────
+
+    def _rebuild_op_combo(self, ft: str) -> None:
+        from utils.cat_query_filters import FilterType, ALLOWED_OPERATORS
+        self._op_cb.blockSignals(True)
+        self._op_cb.clear()
+        ft_enum = next((e for e in FilterType if e.value == ft), None)
+        for op in (ALLOWED_OPERATORS.get(ft_enum) or ()):
+            self._op_cb.addItem(_OPERATOR_LABELS.get(op.value, op.value), op.value)
+        self._op_cb.blockSignals(False)
+
+    def _rebuild_val_widget(self, ft: str, op: str, initial=None) -> None:
+        # Tear down previous widget
+        if self._val_w is not None:
+            self._val_lay.removeWidget(self._val_w)
+            self._val_w.deleteLater()
+            self._val_w = None
+
+        if op in _NO_VALUE_OPERATORS:
+            lbl = QLabel("—")
+            lbl.setStyleSheet("color: #444; font-size: 11px; background: transparent;")
+            self._val_lay.addWidget(lbl)
+            self._val_w = lbl
+            return
+
+        # Room + EQ/NE → dropdown of display names
+        if ft == "room" and op in ("eq", "ne"):
+            w = QComboBox()
+            w.setStyleSheet(self._COMBO_SS)
+            for display_name in ROOM_DISPLAY_NAMES.values():
+                w.addItem(display_name, display_name)
+            if initial is not None:
+                i = w.findData(str(initial))
+                if i >= 0:
+                    w.setCurrentIndex(i)
+            w.currentIndexChanged.connect(self.changed.emit)
+            self._val_lay.addWidget(w)
+            self._val_w = w
+            return
+
+        if ft in _STRING_FIELD_CHOICES:
+            w = QComboBox()
+            w.setStyleSheet(self._COMBO_SS)
+            for choice in _STRING_FIELD_CHOICES[ft]:
+                w.addItem(choice, choice)
+            if initial is not None:
+                i = w.findData(str(initial))
+                if i >= 0:
+                    w.setCurrentIndex(i)
+            w.currentIndexChanged.connect(self.changed.emit)
+
+        elif ft in ("mutation_count", "defects_count"):
+            w = QSpinBox()
+            w.setStyleSheet(self._SPIN_SS)
+            w.setRange(0, 99)
+            if initial is not None:
+                try:
+                    w.setValue(int(initial))
+                except (TypeError, ValueError):
+                    pass
+            w.valueChanged.connect(self.changed.emit)
+
+        else:
+            w = QLineEdit()
+            w.setStyleSheet(self._INPUT_SS)
+            if op in ("any_of", "none_of"):
+                w.setPlaceholderText("val1, val2, …")
+                if isinstance(initial, list):
+                    w.setText(", ".join(str(v) for v in initial))
+                elif initial:
+                    w.setText(str(initial))
+            else:
+                w.setPlaceholderText("value…")
+                if initial is not None:
+                    w.setText(str(initial))
+            w.textChanged.connect(self.changed.emit)
+
+        self._val_lay.addWidget(w)
+        self._val_w = w
+
+    # ── Public ───────────────────────────────────────────────────────
+
+    def to_block(self):
+        """Return a FilterBlock for the current row, or None if invalid."""
+        from utils.cat_query_filters import FilterBlock
+        ft = self._type_cb.currentData()
+        op = self._op_cb.currentData()
+        if not ft or not op:
+            return None
+        value = None
+        if op not in _NO_VALUE_OPERATORS and self._val_w is not None:
+            w = self._val_w
+            if isinstance(w, QComboBox):
+                value = w.currentData()
+            elif isinstance(w, QSpinBox):
+                value = w.value()
+            elif isinstance(w, QLineEdit):
+                text = w.text().strip()
+                if op in ("any_of", "none_of"):
+                    value = [v.strip() for v in text.split(",") if v.strip()]
+                else:
+                    value = text if text else None
+        return FilterBlock(filter_type=ft, operator=op, value=value)
+
+
+# ------------------------------------------------------------------
+# Query-builder: collapsible panel (Newborns tab)
+# ------------------------------------------------------------------
+
+class _NewbornQueryBar(QWidget):
+    """Collapsible advanced query-builder shown below the Newborns sub-filter bar."""
+
+    changed = Signal()
+
+    def __init__(self, presets_path: str, parent=None):
+        super().__init__(parent)
+        self._presets_path = presets_path
+        self._rows: list[_FilterBlockRow] = []
+        self._logical_op = "AND"
+
+        self.setStyleSheet(
+            "QWidget { background: #0c0c18; border-bottom: 1px solid #1a1a3a; }"
+        )
+
+        root_lay = QVBoxLayout(self)
+        root_lay.setContentsMargins(0, 0, 0, 0)
+        root_lay.setSpacing(0)
+
+        # ── Header (always visible) ────────────────────────────────────
+        hdr = QWidget()
+        hdr.setStyleSheet(
+            "QWidget { background: #0c0c18; border-bottom: 1px solid #181828; }"
+        )
+        hdr_lay = QHBoxLayout(hdr)
+        hdr_lay.setContentsMargins(10, 4, 10, 4)
+        hdr_lay.setSpacing(8)
+
+        self._toggle_btn = QPushButton("🔍 Advanced Filter  ▾")
+        self._toggle_btn.setCheckable(True)
+        self._toggle_btn.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 10px;"
+            " border: 1px solid #2a2a5a; border-radius: 4px;"
+            " background: transparent; color: #6666aa; }"
+            "QPushButton:checked { color: #aaaaff; border-color: #5555aa;"
+            " font-weight: bold; }"
+            "QPushButton:hover { background: #0e0e2a; color: #8888cc; }"
+        )
+        self._toggle_btn.clicked.connect(self._on_toggle)
+        hdr_lay.addWidget(self._toggle_btn)
+
+        self._status_lbl = QLabel("")
+        self._status_lbl.setStyleSheet(
+            "color: #5555aa; font-size: 10px; background: transparent;"
+        )
+        hdr_lay.addWidget(self._status_lbl)
+        hdr_lay.addStretch()
+
+        self._clear_btn = QPushButton("✕ Clear all")
+        self._clear_btn.setStyleSheet(
+            "QPushButton { font-size: 10px; padding: 2px 8px;"
+            " border: 1px solid #3a2a3a; border-radius: 3px;"
+            " background: transparent; color: #886688; }"
+            "QPushButton:hover { background: #1e0e1e; color: #cc88cc; }"
+        )
+        self._clear_btn.clicked.connect(self._clear_all)
+        self._clear_btn.hide()
+        hdr_lay.addWidget(self._clear_btn)
+
+        root_lay.addWidget(hdr)
+
+        # ── Body (collapsible) ─────────────────────────────────────────
+        self._body = QWidget()
+        self._body.setStyleSheet("QWidget { background: #0c0c18; }")
+        body_lay = QVBoxLayout(self._body)
+        body_lay.setContentsMargins(10, 6, 10, 8)
+        body_lay.setSpacing(5)
+
+        # Logic-op row
+        op_row = QHBoxLayout()
+        op_row.setContentsMargins(0, 0, 0, 2)
+        op_row.setSpacing(5)
+
+        match_lbl = QLabel("Match:")
+        match_lbl.setStyleSheet(
+            "color: #666; font-size: 11px; background: transparent;"
+        )
+        op_row.addWidget(match_lbl)
+
+        _and_act = (
+            "QPushButton { font-size: 11px; padding: 1px 10px;"
+            " border: 1px solid #4444aa; border-radius: 3px;"
+            " background: #14143a; color: #8888ee; font-weight: bold; }"
+        )
+        _and_norm = (
+            "QPushButton { font-size: 11px; padding: 1px 10px;"
+            " border: 1px solid #333; border-radius: 3px;"
+            " background: transparent; color: #666; }"
+            "QPushButton:hover { background: #0e0e2a; color: #9999cc; }"
+        )
+        _or_act = (
+            "QPushButton { font-size: 11px; padding: 1px 10px;"
+            " border: 1px solid #aa6633; border-radius: 3px;"
+            " background: #2a1a0e; color: #ee9966; font-weight: bold; }"
+        )
+        _or_norm = (
+            "QPushButton { font-size: 11px; padding: 1px 10px;"
+            " border: 1px solid #333; border-radius: 3px;"
+            " background: transparent; color: #666; }"
+            "QPushButton:hover { background: #1a0e0e; color: #cc9966; }"
+        )
+        self._and_act_ss = _and_act
+        self._and_norm_ss = _and_norm
+        self._or_act_ss = _or_act
+        self._or_norm_ss = _or_norm
+
+        self._and_btn = QPushButton("ALL (AND)")
+        self._and_btn.setStyleSheet(_and_act)
+        self._or_btn = QPushButton("ANY (OR)")
+        self._or_btn.setStyleSheet(_or_norm)
+        self._and_btn.clicked.connect(lambda: self._set_logical_op("AND"))
+        self._or_btn.clicked.connect(lambda: self._set_logical_op("OR"))
+        op_row.addWidget(self._and_btn)
+        op_row.addWidget(self._or_btn)
+        op_row.addStretch()
+
+        add_cond_btn = QPushButton("＋ Add condition")
+        add_cond_btn.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 1px 10px;"
+            " border: 1px solid #2a4a2a; border-radius: 3px;"
+            " background: transparent; color: #558855; }"
+            "QPushButton:hover { background: #0a180a; color: #88cc88; }"
+        )
+        add_cond_btn.clicked.connect(lambda: self._add_row())
+        op_row.addWidget(add_cond_btn)
+        body_lay.addLayout(op_row)
+
+        # Filter rows container
+        self._rows_w = QWidget()
+        self._rows_w.setStyleSheet("background: transparent;")
+        self._rows_lay = QVBoxLayout(self._rows_w)
+        self._rows_lay.setContentsMargins(0, 0, 0, 0)
+        self._rows_lay.setSpacing(3)
+        body_lay.addWidget(self._rows_w)
+
+        # Preset bar
+        pre_row = QHBoxLayout()
+        pre_row.setContentsMargins(0, 4, 0, 0)
+        pre_row.setSpacing(5)
+
+        pre_lbl = QLabel("Presets:")
+        pre_lbl.setStyleSheet("color: #555; font-size: 10px; background: transparent;")
+        pre_row.addWidget(pre_lbl)
+
+        self._preset_name_edit = QLineEdit()
+        self._preset_name_edit.setFixedWidth(110)
+        self._preset_name_edit.setPlaceholderText("name…")
+        self._preset_name_edit.setStyleSheet(
+            "QLineEdit { font-size: 10px; padding: 2px 5px;"
+            " border: 1px solid #2a3a2a; border-radius: 3px;"
+            " background: #0a140a; color: #88aa88; }"
+        )
+        pre_row.addWidget(self._preset_name_edit)
+
+        save_p_btn = QPushButton("💾")
+        save_p_btn.setFixedSize(26, 22)
+        save_p_btn.setToolTip("Save current filter as a preset")
+        save_p_btn.setStyleSheet(
+            "QPushButton { font-size: 12px; padding: 0;"
+            " border: 1px solid #2a4a2a; border-radius: 3px;"
+            " background: #0a180a; color: #55aa55; }"
+            "QPushButton:hover { background: #0e1e0e; color: #88cc88; }"
+        )
+        save_p_btn.clicked.connect(self._on_save_preset)
+        pre_row.addWidget(save_p_btn)
+
+        self._preset_cb = QComboBox()
+        self._preset_cb.setMinimumWidth(110)
+        self._preset_cb.setStyleSheet(
+            "QComboBox { font-size: 10px; padding: 2px 5px;"
+            " border: 1px solid #2a2a4a; border-radius: 3px;"
+            " background: #0a0a18; color: #8888aa; }"
+            "QComboBox QAbstractItemView { background: #14141e; color: #aaa;"
+            " border: 1px solid #3a3a5a; }"
+        )
+        pre_row.addWidget(self._preset_cb)
+
+        load_p_btn = QPushButton("📂")
+        load_p_btn.setFixedSize(26, 22)
+        load_p_btn.setToolTip("Load selected preset")
+        load_p_btn.setStyleSheet(
+            "QPushButton { font-size: 12px; padding: 0;"
+            " border: 1px solid #2a3a4a; border-radius: 3px;"
+            " background: #0a0e18; color: #5577aa; }"
+            "QPushButton:hover { background: #0e1420; color: #88aadd; }"
+        )
+        load_p_btn.clicked.connect(self._on_load_preset)
+        pre_row.addWidget(load_p_btn)
+
+        del_p_btn = QPushButton("🗑")
+        del_p_btn.setFixedSize(26, 22)
+        del_p_btn.setToolTip("Delete selected preset")
+        del_p_btn.setStyleSheet(
+            "QPushButton { font-size: 12px; padding: 0;"
+            " border: 1px solid #3a2222; border-radius: 3px;"
+            " background: #140a0a; color: #aa4444; }"
+            "QPushButton:hover { background: #1e0e0e; color: #dd6666; }"
+        )
+        del_p_btn.clicked.connect(self._on_delete_preset)
+        pre_row.addWidget(del_p_btn)
+
+        pre_row.addStretch()
+        body_lay.addLayout(pre_row)
+
+        self._body.hide()
+        root_lay.addWidget(self._body)
+
+        self._refresh_presets_combo()
+
+    # ── Public ────────────────────────────────────────────────────────
+
+    def get_filter_group(self):
+        """Return the active FilterGroup, or None when no conditions are defined."""
+        from utils.cat_query_filters import FilterGroup
+        blocks = [r.to_block() for r in self._rows]
+        blocks = [b for b in blocks if b is not None]
+        if not blocks:
+            return None
+        return FilterGroup(logical_op=self._logical_op, children=blocks)
+
+    # ── Private ───────────────────────────────────────────────────────
+
+    def _on_toggle(self, checked: bool) -> None:
+        if checked:
+            self._body.show()
+            self._toggle_btn.setText("🔍 Advanced Filter  ▴")
+        else:
+            self._body.hide()
+            self._toggle_btn.setText("🔍 Advanced Filter  ▾")
+
+    def _set_logical_op(self, op: str) -> None:
+        self._logical_op = op
+        self._and_btn.setStyleSheet(
+            self._and_act_ss if op == "AND" else self._and_norm_ss
+        )
+        self._or_btn.setStyleSheet(
+            self._or_act_ss if op == "OR" else self._or_norm_ss
+        )
+        self.changed.emit()
+
+    def _add_row(self, block=None) -> None:
+        row = _FilterBlockRow(block)
+        row.removed.connect(self._remove_row)
+        row.changed.connect(self._on_rows_changed)
+        self._rows.append(row)
+        self._rows_lay.addWidget(row)
+        self._update_status()
+        self.changed.emit()
+
+    def _remove_row(self, row) -> None:
+        if row in self._rows:
+            self._rows.remove(row)
+        self._rows_lay.removeWidget(row)
+        row.deleteLater()
+        self._update_status()
+        self.changed.emit()
+
+    def _on_rows_changed(self) -> None:
+        self._update_status()
+        self.changed.emit()
+
+    def _clear_all(self) -> None:
+        for row in list(self._rows):
+            self._rows_lay.removeWidget(row)
+            row.deleteLater()
+        self._rows.clear()
+        self._update_status()
+        self.changed.emit()
+
+    def _update_status(self) -> None:
+        n = len(self._rows)
+        if n == 0:
+            self._status_lbl.setText("")
+            self._clear_btn.hide()
+        else:
+            s = "s" if n != 1 else ""
+            self._status_lbl.setText(f"● {n} condition{s} active")
+            self._clear_btn.show()
+
+    def _refresh_presets_combo(self) -> None:
+        from utils.cat_query_filters import list_presets
+        self._preset_cb.blockSignals(True)
+        self._preset_cb.clear()
+        if self._presets_path:
+            try:
+                for name in list_presets(self._presets_path):
+                    self._preset_cb.addItem(name, name)
+            except Exception:
+                pass
+        self._preset_cb.blockSignals(False)
+
+    def _on_save_preset(self) -> None:
+        from utils.cat_query_filters import save_preset, FilterGroup
+        name = self._preset_name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Save Preset", "Please enter a preset name.")
+            return
+        if not self._presets_path:
+            QMessageBox.warning(self, "Save Preset", "No save folder detected.")
+            return
+        group = self.get_filter_group() or FilterGroup(logical_op=self._logical_op)
+        try:
+            save_preset(name, group, self._presets_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Preset", f"Could not save:\n{exc}")
+            return
+        self._refresh_presets_combo()
+        idx = self._preset_cb.findData(name)
+        if idx >= 0:
+            self._preset_cb.setCurrentIndex(idx)
+
+    def _on_load_preset(self) -> None:
+        from utils.cat_query_filters import load_preset, FilterBlock
+        name = self._preset_cb.currentData()
+        if not name or not self._presets_path:
+            return
+        try:
+            group = load_preset(name, self._presets_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Preset", f"Could not load:\n{exc}")
+            return
+        self._clear_all()
+        self._set_logical_op(group.logical_op)
+        for child in group.children:
+            if isinstance(child, FilterBlock):
+                self._add_row(child)
+        # Auto-expand if collapsed
+        if not self._toggle_btn.isChecked():
+            self._toggle_btn.setChecked(True)
+            self._on_toggle(True)
+        self._preset_name_edit.setText(name)
+
+    def _on_delete_preset(self) -> None:
+        from utils.cat_query_filters import delete_preset
+        name = self._preset_cb.currentData()
+        if not name or not self._presets_path:
+            return
+        reply = QMessageBox.question(
+            self, "Delete Preset",
+            f"Delete preset <b>{name}</b>?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            delete_preset(name, self._presets_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Preset", f"Could not delete:\n{exc}")
+            return
+        self._refresh_presets_combo()
+
+
+# ------------------------------------------------------------------
 # Main Cat Manager window
 # ------------------------------------------------------------------
 
@@ -1213,6 +1841,11 @@ class CatManagerWindow(QWidget):
 
         self._sub_filter_bar.hide()
 
+        # ── Advanced query builder bar (Newborns tab only) ────────────
+        self._query_bar = _NewbornQueryBar(_get_query_presets_path())
+        self._query_bar.changed.connect(self._rebuild_list)
+        self._query_bar.hide()
+
         # ── Bank tag filter bar (hidden unless "bank" tab active) ────
         self._bank_tag_bar = QWidget()
         self._bank_tag_bar.setStyleSheet(
@@ -1332,6 +1965,7 @@ class CatManagerWindow(QWidget):
         root_lay.setSpacing(0)
         root_lay.addWidget(filter_bar)
         root_lay.addWidget(self._sub_filter_bar)
+        root_lay.addWidget(self._query_bar)
         root_lay.addWidget(self._bank_tag_bar)
         root_lay.addWidget(splitter, 1)
 
@@ -1361,14 +1995,17 @@ class CatManagerWindow(QWidget):
         # Show/hide sub-filter bar
         if key == "newborns":
             self._sub_filter_bar.show()
+            self._query_bar.show()
             self._bank_tag_bar.hide()
             self._refresh_kill_counter()
         elif key == "bank":
             self._sub_filter_bar.hide()
+            self._query_bar.hide()
             self._bank_tag_bar.show()
             self._rebuild_bank_tag_bar()
         else:
             self._sub_filter_bar.hide()
+            self._query_bar.hide()
             self._bank_tag_bar.hide()
             # Reset all sub-filters so they're clean next time
             self._sub_filter       = "all"
@@ -1485,7 +2122,7 @@ class CatManagerWindow(QWidget):
 
     def _filtered_cats(self) -> list:
         from utils.cat_filters import filter_cats
-        return filter_cats(
+        cats = filter_cats(
             self._cats,
             self._filter,
             sub_filter=self._sub_filter,
@@ -1493,6 +2130,13 @@ class CatManagerWindow(QWidget):
             sexuality_filter=self._sexuality_filter,
             tag_filter=self._tag_filter,
         )
+        # Apply advanced query builder filter (Newborns tab only)
+        if self._filter == "newborns":
+            from utils.cat_query_filters import filter_cats_query
+            query_group = self._query_bar.get_filter_group()
+            if query_group is not None:
+                cats = filter_cats_query(cats, query_group)
+        return cats
 
     # ── List ─────────────────────────────────────────────────────────
 
