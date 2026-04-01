@@ -78,6 +78,11 @@ _STRING_FIELD_CHOICES: dict[str, list[str]] = {
 # Operators that take no value input at all
 _NO_VALUE_OPERATORS: frozenset[str] = frozenset({"is_empty", "is_not_empty"})
 
+# List-type fields that support suggestion dropdowns (contains / not_contains)
+_SUGGESTION_FIELDS: frozenset[str] = frozenset({
+    "abilities", "passives", "mutation", "defects", "disorder",
+})
+
 
 def _get_query_presets_path() -> str:
     """Return the path to cat_query_presets.json in the custom save folder."""
@@ -1038,8 +1043,9 @@ class _FilterBlockRow(QFrame):
         "QSpinBox::up-button, QSpinBox::down-button { width: 14px; }"
     )
 
-    def __init__(self, block=None, parent=None):
+    def __init__(self, block=None, suggestions: dict | None = None, parent=None):
         super().__init__(parent)
+        self._suggestions: dict[str, list[str]] = suggestions or {}
         self.setStyleSheet(
             "QFrame { background: #14141e; border: 1px solid #2a2a3a; border-radius: 4px; }"
         )
@@ -1162,6 +1168,22 @@ class _FilterBlockRow(QFrame):
             self._val_w = w
             return
 
+        # List fields + contains / not_contains → editable dropdown with suggestions
+        if ft in _SUGGESTION_FIELDS and op in ("contains", "not_contains"):
+            suggestions_list = self._suggestions.get(ft, [])
+            w = QComboBox()
+            w.setEditable(True)
+            w.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+            w.setStyleSheet(self._COMBO_SS)
+            w.addItems(suggestions_list)
+            w.setCurrentText("")
+            if initial is not None:
+                w.setCurrentText(str(initial))
+            w.currentTextChanged.connect(self.changed.emit)
+            self._val_lay.addWidget(w)
+            self._val_w = w
+            return
+
         if ft in _STRING_FIELD_CHOICES:
             w = QComboBox()
             w.setStyleSheet(self._COMBO_SS)
@@ -1215,7 +1237,8 @@ class _FilterBlockRow(QFrame):
         if op not in _NO_VALUE_OPERATORS and self._val_w is not None:
             w = self._val_w
             if isinstance(w, QComboBox):
-                value = w.currentData()
+                # Editable combos (suggestion dropdowns) → read free text
+                value = w.currentText() if w.isEditable() else w.currentData()
             elif isinstance(w, QSpinBox):
                 value = w.value()
             elif isinstance(w, QLineEdit):
@@ -1241,6 +1264,7 @@ class _NewbornQueryBar(QWidget):
         self._presets_path = presets_path
         self._rows: list[_FilterBlockRow] = []
         self._logical_op = "AND"
+        self._suggestions: dict[str, list[str]] = {}   # populated by set_cats()
 
         self.setStyleSheet(
             "QWidget { background: #0c0c18; border-bottom: 1px solid #1a1a3a; }"
@@ -1451,6 +1475,27 @@ class _NewbornQueryBar(QWidget):
             return None
         return FilterGroup(logical_op=self._logical_op, children=blocks)
 
+    def set_cats(self, cats: list) -> None:
+        """Recompute suggestion lists from *cats* (call on load and refresh)."""
+        ab: set[str] = set()
+        pa: set[str] = set()
+        mu: set[str] = set()
+        de: set[str] = set()
+        di: set[str] = set()
+        for cat in cats:
+            ab.update(getattr(cat, "abilities",         []) or [])
+            pa.update(getattr(cat, "passive_abilities", []) or [])
+            mu.update(getattr(cat, "mutations",         []) or [])
+            de.update(getattr(cat, "defects",           []) or [])
+            di.update(getattr(cat, "disorders",         []) or [])
+        self._suggestions = {
+            "abilities": sorted(ab),
+            "passives":  sorted(pa),
+            "mutation":  sorted(mu),
+            "defects":   sorted(de),
+            "disorder":  sorted(di),
+        }
+
     # ── Private ───────────────────────────────────────────────────────
 
     def _on_toggle(self, checked: bool) -> None:
@@ -1472,7 +1517,7 @@ class _NewbornQueryBar(QWidget):
         self.changed.emit()
 
     def _add_row(self, block=None) -> None:
-        row = _FilterBlockRow(block)
+        row = _FilterBlockRow(block, suggestions=self._suggestions)
         row.removed.connect(self._remove_row)
         row.changed.connect(self._on_rows_changed)
         self._rows.append(row)
@@ -1844,6 +1889,7 @@ class CatManagerWindow(QWidget):
         # ── Advanced query builder bar (Newborns tab only) ────────────
         self._query_bar = _NewbornQueryBar(_get_query_presets_path())
         self._query_bar.changed.connect(self._rebuild_list)
+        self._query_bar.set_cats(self._cats)
         self._query_bar.hide()
 
         # ── Bank tag filter bar (hidden unless "bank" tab active) ────
@@ -2738,4 +2784,5 @@ class CatManagerWindow(QWidget):
         """Update the cat list (called when the main window reloads)."""
         self._cats = cats
         self._ms_selected.clear()
+        self._query_bar.set_cats(cats)
         self._rebuild_list()
