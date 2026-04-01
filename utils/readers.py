@@ -39,7 +39,9 @@ class BinaryReader:
         start = self.pos
         try:
             length = self.u64()
-            if length > 10000 or length < 0: return None
+            if length > 10000 or length < 0:
+                self.pos = start
+                return None
             res = self.data[self.pos: self.pos + int(length)].decode('utf-8', errors='ignore')
             self.pos += int(length)
             return res
