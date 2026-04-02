@@ -2541,6 +2541,7 @@ class CatManagerWindow(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "Move Failed", str(exc))
             return
+        self._ms_selected.clear()
         self._rebuild_list()
         QMessageBox.information(self, "Done", f"{moved} cat(s) moved to <b>{_room_display(room)}</b>.")
 
