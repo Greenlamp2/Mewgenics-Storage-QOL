@@ -83,6 +83,8 @@ class ItemCatalog:
         return ability
 
     def solve_icon_name(self, name):
+        if not name:
+            return None
         solved_name = name.replace('_DESC', '').replace('_FIXED', '').replace('ITEM_', '')
         return 'ITEM_' + format_item_name(solved_name) + '.svg'
 

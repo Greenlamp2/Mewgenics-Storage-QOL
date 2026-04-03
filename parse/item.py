@@ -41,7 +41,7 @@ class Item:
             self.ability_details = item_catalog.get_item_ability(self.ability)
         self.passives = self.details.get('passives', {})
         icon_name_raw = self.details.get('name_resolved', None) or self.details.get('desc')
-        self.icon_name = item_catalog.solve_icon_name(icon_name_raw)
+        self.icon_name = item_catalog.solve_icon_name(icon_name_raw) if icon_name_raw else None
         # Syringe modifier items: use dedicated syringe icon
         name_resolved = (self.details.get('name_resolved') or '').lower()
         if self.category == 'modifiers' and (
