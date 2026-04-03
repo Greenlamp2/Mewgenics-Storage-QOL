@@ -1,6 +1,6 @@
 import os
 
-from PySide6.QtCore import Qt, QSize, QTimer, QPoint, QObject, QByteArray, QMimeData, QEvent, Signal
+from PySide6.QtCore import Qt, QSize, QTimer, QPoint, QObject, QByteArray, QMimeData, QEvent, Signal, QThread
 from PySide6.QtGui import QPixmap, QPainter, QIcon, QDrag, QFontMetrics
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -361,6 +361,27 @@ def svg_to_pixmap(svg_path: str, size: int) -> QPixmap:
     return pixmap
 
 
+# ---------------------------------------------------------------------------
+# Background worker — runs AppController.load_data() off the main thread
+# ---------------------------------------------------------------------------
+
+class _LoadDataWorker(QObject):
+    """Worker that calls ctrl.load_data() in a background QThread."""
+    finished = Signal()
+    error    = Signal(str)
+
+    def __init__(self, ctrl):
+        super().__init__()
+        self._ctrl = ctrl
+
+    def run(self):
+        try:
+            self._ctrl.load_data()
+            self.finished.emit()
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, sav_path: str):
         super().__init__()
@@ -382,13 +403,113 @@ class MainWindow(QMainWindow):
         self._pool_set_filter: str = ""            # "" = all sets
         self._pool_set_only:   bool = False        # True = show only armor-set items
 
-        self.ctrl.load_data()
+        # Show the window immediately with a loading screen, then load data in background
+        self._build_loading_screen()
+        QTimer.singleShot(0, self._start_background_load)
+
+    # ------------------------------------------------------------------
+    # Loading screen & background data load
+    # ------------------------------------------------------------------
+
+    def _build_loading_screen(self):
+        """Create and set the initial loading screen as the central widget."""
+        self._loading_widget = QWidget()
+        self._loading_widget.setStyleSheet("QWidget { background: #0d0d1a; }")
+
+        outer = QVBoxLayout(self._loading_widget)
+        outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: #1a1a2e; border: 2px solid #4a9eff;"
+            " border-radius: 14px; }"
+        )
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(60, 48, 60, 48)
+        card_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.setSpacing(20)
+
+        icon_lbl = QLabel("🐱")
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_lbl.setStyleSheet(
+            "QLabel { font-size: 64px; background: transparent; border: none; }"
+        )
+
+        self._loading_title = QLabel("Mewgenics Storage QOL")
+        self._loading_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._loading_title.setStyleSheet(
+            "QLabel { color: #4a9eff; font-size: 20px; font-weight: bold;"
+            " background: transparent; border: none; }"
+        )
+
+        self._loading_status = QLabel("Loading save data…")
+        self._loading_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._loading_status.setStyleSheet(
+            "QLabel { color: #a0b0d0; font-size: 14px;"
+            " background: transparent; border: none; }"
+        )
+
+        # Animated dots label
+        self._loading_dots_label = QLabel("⠋")
+        self._loading_dots_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._loading_dots_label.setStyleSheet(
+            "QLabel { color: #4a9eff; font-size: 28px;"
+            " background: transparent; border: none; }"
+        )
+        self._loading_dot_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        self._loading_dot_idx = 0
+
+        self._loading_dot_timer = QTimer(self)
+        self._loading_dot_timer.setInterval(80)
+        self._loading_dot_timer.timeout.connect(self._tick_loading_dots)
+        self._loading_dot_timer.start()
+
+        card_layout.addWidget(icon_lbl)
+        card_layout.addWidget(self._loading_title)
+        card_layout.addSpacing(4)
+        card_layout.addWidget(self._loading_dots_label)
+        card_layout.addWidget(self._loading_status)
+
+        outer.addWidget(card)
+        self.setCentralWidget(self._loading_widget)
+
+    def _tick_loading_dots(self):
+        self._loading_dot_idx = (self._loading_dot_idx + 1) % len(self._loading_dot_frames)
+        self._loading_dots_label.setText(self._loading_dot_frames[self._loading_dot_idx])
+
+    def _start_background_load(self):
+        """Kick off load_data() in a background QThread."""
+        self._load_thread = QThread(self)
+        self._load_worker = _LoadDataWorker(self.ctrl)
+        self._load_worker.moveToThread(self._load_thread)
+
+        self._load_thread.started.connect(self._load_worker.run)
+        self._load_worker.finished.connect(self._on_load_finished)
+        self._load_worker.error.connect(self._on_load_error)
+        self._load_worker.finished.connect(self._load_thread.quit)
+        self._load_worker.error.connect(self._load_thread.quit)
+        self._load_thread.finished.connect(self._load_worker.deleteLater)
+        self._load_thread.finished.connect(self._load_thread.deleteLater)
+
+        self._load_thread.start()
+
+    def _on_load_finished(self):
+        """Called in the main thread when background load_data() completes."""
+        self._loading_dot_timer.stop()
+        # Tear down the loading screen and build the real UI
         self._build_ui()
         self._build_gold_bar()
         self._build_overlay()
         self._refresh_pool_tab_title()
         self._populate(self.ctrl.inv_items["Storage"])
+        # Show the "go to Main Menu" overlay (same as before)
         QTimer.singleShot(0, self._show_overlay)
+
+    def _on_load_error(self, msg: str):
+        """Called in the main thread when load_data() raises an exception."""
+        self._loading_dot_timer.stop()
+        self._loading_status.setText(f"❌ Error: {msg}")
+        self._loading_dots_label.setText("⚠")
 
     # ------------------------------------------------------------------
     # UI construction
