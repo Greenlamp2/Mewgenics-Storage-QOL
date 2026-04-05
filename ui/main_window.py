@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QFrame, QSplitter,
     QScrollArea, QGridLayout, QToolButton, QTabBar, QPushButton, QMessageBox,
-    QApplication, QStackedWidget, QInputDialog, QMenu, QComboBox,
+    QApplication, QStackedWidget, QInputDialog, QMenu, QComboBox, QLineEdit,
 )
 
 from parse.item import Item, GhostItem
@@ -402,6 +402,7 @@ class MainWindow(QMainWindow):
         self._bank_drag_filters: list = []         # hold refs to prevent GC
         self._pool_set_filter: str = ""            # "" = all sets
         self._pool_set_only:   bool = False        # True = show only armor-set items
+        self._pool_search_text: str = ""           # "" = no text filter
 
         # Show the window immediately with a loading screen, then load data in background
         self._build_loading_screen()
@@ -600,6 +601,25 @@ class MainWindow(QMainWindow):
         self._pool_set_combo.setVisible(False)
         self._pool_set_combo.currentTextChanged.connect(self._on_pool_set_filter_changed)
         sort_layout.addWidget(self._pool_set_combo)
+
+        # ── Pool search input (visible only on Pool tab) ──────────────
+        self._pool_search_sep = QFrame()
+        self._pool_search_sep.setFrameShape(QFrame.Shape.VLine)
+        self._pool_search_sep.setStyleSheet("QFrame { color: #444; }")
+        self._pool_search_sep.setVisible(False)
+        sort_layout.addWidget(self._pool_search_sep)
+
+        self._pool_search_input = QLineEdit()
+        self._pool_search_input.setPlaceholderText("🔍 Search items…")
+        self._pool_search_input.setFixedWidth(160)
+        self._pool_search_input.setStyleSheet(
+            "QLineEdit { font-size: 11px; padding: 2px 7px; border: 1px solid #555;"
+            " border-radius: 3px; background: #2d2d2d; color: #ccc; }"
+            "QLineEdit:focus { border-color: #4a9eff; }"
+        )
+        self._pool_search_input.setVisible(False)
+        self._pool_search_input.textChanged.connect(self._on_pool_search_changed)
+        sort_layout.addWidget(self._pool_search_input)
 
         self.sacrifice_all_btn = QPushButton("✦ Sacrifice All → Tokens")
         self.sacrifice_all_btn.setVisible(False)
@@ -809,6 +829,17 @@ class MainWindow(QMainWindow):
         )
         self.purchase_pool_btn.clicked.connect(self._purchase_pool_item)
 
+        self.buy_copy_btn = QPushButton()
+        self.buy_copy_btn.setVisible(False)
+        self.buy_copy_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; font-weight: bold; padding: 6px 12px;"
+            " background: #1a6b3c; color: white; border: none; border-radius: 4px; }"
+            "QPushButton:hover { background: #155e34; }"
+            "QPushButton:pressed { background: #0e4226; }"
+            "QPushButton:disabled { background: #2a2a2a; color: #555; }"
+        )
+        self.buy_copy_btn.clicked.connect(self._buy_copy_item)
+
         self.move_btn = QPushButton()
         self.move_btn.setVisible(False)
         self.move_btn.setStyleSheet(
@@ -861,6 +892,7 @@ class MainWindow(QMainWindow):
         detail_layout.addWidget(self.send_gift_btn)
         detail_layout.addWidget(self.clone_to_storage_btn)
         detail_layout.addWidget(self.purchase_pool_btn)
+        detail_layout.addWidget(self.buy_copy_btn)
         detail_layout.addStretch()
 
         splitter.addWidget(left_widget)
@@ -1288,6 +1320,7 @@ class MainWindow(QMainWindow):
         self.send_gift_btn.setVisible(False)
         self.clone_to_storage_btn.setVisible(False)
         self.purchase_pool_btn.setVisible(False)
+        self.buy_copy_btn.setVisible(False)
 
     def _refresh_sacrifice_all_btn(self):
         current_tab = self._tab_key(self.tab_bar.tabText(self.tab_bar.currentIndex()))
@@ -1527,6 +1560,8 @@ class MainWindow(QMainWindow):
         # Show set-filter controls only on Pool tab
         _is_pool = (label == "Pool")
         self._pool_set_btn.setVisible(_is_pool)
+        self._pool_search_sep.setVisible(_is_pool)
+        self._pool_search_input.setVisible(_is_pool)
         if _is_pool:
             self._refresh_pool_set_combo()
             # Restore combo visibility to match current toggle state
@@ -1538,6 +1573,10 @@ class MainWindow(QMainWindow):
             # Reset all pool filters when leaving
             self._pool_set_only = False
             self._pool_set_filter = ""
+            self._pool_search_text = ""
+            self._pool_search_input.blockSignals(True)
+            self._pool_search_input.clear()
+            self._pool_search_input.blockSignals(False)
             self._pool_set_btn.setStyleSheet(self._pool_set_btn_styles[0])
             self._pool_set_sep.setVisible(False)
             self._pool_set_lbl.setVisible(False)
@@ -1716,6 +1755,14 @@ class MainWindow(QMainWindow):
             indexed = [
                 (i, it) for i, it in indexed
                 if self._pool_set_filter in (getattr(it, 'armor_set_name', None) or [])
+            ]
+
+        # ── Pool text search filter ───────────────────────────────────
+        if self._pool_search_text:
+            _q = self._pool_search_text.lower()
+            indexed = [
+                (i, it) for i, it in indexed
+                if _q in ((getattr(it, 'details', None) or {}).get('name_resolved') or it.name or '').lower()
             ]
 
         discovered = self._sorted_indexed(
@@ -1990,6 +2037,7 @@ class MainWindow(QMainWindow):
             # Bank tab: allow withdrawing to storage, trashing, or sending as gift
             self.clone_to_storage_btn.setVisible(False)
             self.purchase_pool_btn.setVisible(False)
+            self.buy_copy_btn.setVisible(False)
             self.sacrifice_btn.setVisible(False)
             self.repair_btn.setVisible(False)
             self.move_btn.setVisible(False)
@@ -2019,6 +2067,22 @@ class MainWindow(QMainWindow):
                     "🗑 Move to Trash" if current_tab == "Storage" else "📦 Move to Storage"
                 )
             self.move_btn.setVisible(not is_broken)
+
+            # Buy Copy button — Storage only, non-broken items with known rarity
+            if current_tab == "Storage" and not is_broken and rarity and rarity in self.ctrl.tokens:
+                token_count  = self.ctrl.tokens.get(rarity, 0)
+                rarity_label = rarity.replace("_", " ").capitalize()
+                self.buy_copy_btn.setText(
+                    f"🛒 Buy Copy  ({PURCHASE_COST} {rarity_label} token{'s' if PURCHASE_COST != 1 else ''})"
+                )
+                self.buy_copy_btn.setEnabled(token_count >= PURCHASE_COST)
+                self.buy_copy_btn.setToolTip(
+                    f"Add a copy of this item to Storage for {PURCHASE_COST} {rarity_label} token(s).\n"
+                    f"You have: {token_count}"
+                )
+                self.buy_copy_btn.setVisible(True)
+            else:
+                self.buy_copy_btn.setVisible(False)
 
             # Bank button — Storage and Trash items (non-broken)
             if current_tab in ("Storage", "Trash") and not is_broken:
@@ -2438,6 +2502,53 @@ class MainWindow(QMainWindow):
         self._populate(self.ctrl.inv_items["Pool"])
         # Re-select the same item so the detail stays open and the player can buy again
         self._reselect_item_by_name(item_name)
+
+    def _buy_copy_item(self):
+        """Buy a copy of the currently-selected Storage item for PURCHASE_COST tokens."""
+        if self._selected_item_idx is None or self._selected_inv_key != "Storage":
+            return
+        if not self._confirm_if_save_changed():
+            return
+
+        item = self.ctrl.inv_items["Storage"][self._selected_item_idx]
+        rarity       = getattr(item, "rarity", None) or ""
+        rarity_label = rarity.replace("_", " ").capitalize()
+        name         = (getattr(item, "details", None) or {}).get("name_resolved") or item.name or "?"
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("🛒 Buy Copy")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(
+            f"Buy a copy of <b>{name}</b> for "
+            f"<b>{PURCHASE_COST} {rarity_label} token{'s' if PURCHASE_COST != 1 else ''}</b>?<br><br>"
+            f"A new copy will be added to your <b>Storage</b>."
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.ctrl.apply_purchase_pool_item(item)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Cannot Buy Copy", str(exc))
+            return
+
+        self._sync_token_labels()
+        # Refresh Storage grid and re-select the same item
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._populate(self.ctrl.inv_items["Storage"])
+        self._reselect_item_by_name(item.name)
+
+    def _on_pool_search_changed(self, text: str):
+        """Called when the pool search input text changes — refresh the pool grid."""
+        self._pool_search_text = text.strip()
+        self._clear_grid()
+        self._clear_detail()
+        self._hide_all_action_btns()
+        self._populate(self.ctrl.inv_items["Pool"])
 
     def _send_gift(self):
         if self._selected_item_idx is None or self._selected_inv_key not in ("Storage", "Bank"):
