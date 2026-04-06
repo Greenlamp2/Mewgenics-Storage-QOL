@@ -1258,6 +1258,7 @@ class _NewbornQueryBar(QWidget):
     """Collapsible advanced query-builder shown below the Newborns sub-filter bar."""
 
     changed = Signal()
+    _clear_selection_requested = Signal()  # emitted when a preset is loaded
 
     def __init__(self, presets_path: str, parent=None):
         super().__init__(parent)
@@ -1303,7 +1304,70 @@ class _NewbornQueryBar(QWidget):
         hdr_lay.addWidget(self._status_lbl)
         hdr_lay.addStretch()
 
-        self._clear_btn = QPushButton("✕ Clear all")
+        # ── Preset controls (always visible in header) ─────────────────
+        _pre_lbl = QLabel("Presets:")
+        _pre_lbl.setStyleSheet("color: #555; font-size: 10px; background: transparent;")
+        hdr_lay.addWidget(_pre_lbl)
+
+        self._preset_name_edit = QLineEdit()
+        self._preset_name_edit.setFixedWidth(100)
+        self._preset_name_edit.setPlaceholderText("name…")
+        self._preset_name_edit.setStyleSheet(
+            "QLineEdit { font-size: 10px; padding: 2px 5px;"
+            " border: 1px solid #2a3a2a; border-radius: 3px;"
+            " background: #0a140a; color: #88aa88; }"
+        )
+        hdr_lay.addWidget(self._preset_name_edit)
+
+        save_p_btn = QPushButton("💾")
+        save_p_btn.setFixedSize(24, 20)
+        save_p_btn.setToolTip("Save current filter as a preset")
+        save_p_btn.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 0;"
+            " border: 1px solid #2a4a2a; border-radius: 3px;"
+            " background: #0a180a; color: #55aa55; }"
+            "QPushButton:hover { background: #0e1e0e; color: #88cc88; }"
+        )
+        save_p_btn.clicked.connect(self._on_save_preset)
+        hdr_lay.addWidget(save_p_btn)
+
+        self._preset_cb = QComboBox()
+        self._preset_cb.setMinimumWidth(100)
+        self._preset_cb.setStyleSheet(
+            "QComboBox { font-size: 10px; padding: 2px 5px;"
+            " border: 1px solid #2a2a4a; border-radius: 3px;"
+            " background: #0a0a18; color: #8888aa; min-height: 18px; }"
+            "QComboBox::drop-down { border: none; width: 14px; }"
+            "QComboBox QAbstractItemView { background: #14141e; color: #aaa;"
+            " border: 1px solid #3a3a5a; }"
+        )
+        hdr_lay.addWidget(self._preset_cb)
+
+        load_p_btn = QPushButton("📂")
+        load_p_btn.setFixedSize(24, 20)
+        load_p_btn.setToolTip("Load selected preset")
+        load_p_btn.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 0;"
+            " border: 1px solid #2a3a4a; border-radius: 3px;"
+            " background: #0a0e18; color: #5577aa; }"
+            "QPushButton:hover { background: #0e1420; color: #88aadd; }"
+        )
+        load_p_btn.clicked.connect(self._on_load_preset)
+        hdr_lay.addWidget(load_p_btn)
+
+        del_p_btn = QPushButton("🗑")
+        del_p_btn.setFixedSize(24, 20)
+        del_p_btn.setToolTip("Delete selected preset")
+        del_p_btn.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 0;"
+            " border: 1px solid #3a2222; border-radius: 3px;"
+            " background: #140a0a; color: #aa4444; }"
+            "QPushButton:hover { background: #1e0e0e; color: #dd6666; }"
+        )
+        del_p_btn.clicked.connect(self._on_delete_preset)
+        hdr_lay.addWidget(del_p_btn)
+
+        self._clear_btn = QPushButton("✕ Clear")
         self._clear_btn.setStyleSheet(
             "QPushButton { font-size: 10px; padding: 2px 8px;"
             " border: 1px solid #3a2a3a; border-radius: 3px;"
@@ -1390,74 +1454,6 @@ class _NewbornQueryBar(QWidget):
         self._rows_lay.setSpacing(3)
         body_lay.addWidget(self._rows_w)
 
-        # Preset bar
-        pre_row = QHBoxLayout()
-        pre_row.setContentsMargins(0, 4, 0, 0)
-        pre_row.setSpacing(5)
-
-        pre_lbl = QLabel("Presets:")
-        pre_lbl.setStyleSheet("color: #555; font-size: 10px; background: transparent;")
-        pre_row.addWidget(pre_lbl)
-
-        self._preset_name_edit = QLineEdit()
-        self._preset_name_edit.setFixedWidth(110)
-        self._preset_name_edit.setPlaceholderText("name…")
-        self._preset_name_edit.setStyleSheet(
-            "QLineEdit { font-size: 10px; padding: 2px 5px;"
-            " border: 1px solid #2a3a2a; border-radius: 3px;"
-            " background: #0a140a; color: #88aa88; }"
-        )
-        pre_row.addWidget(self._preset_name_edit)
-
-        save_p_btn = QPushButton("💾")
-        save_p_btn.setFixedSize(26, 22)
-        save_p_btn.setToolTip("Save current filter as a preset")
-        save_p_btn.setStyleSheet(
-            "QPushButton { font-size: 12px; padding: 0;"
-            " border: 1px solid #2a4a2a; border-radius: 3px;"
-            " background: #0a180a; color: #55aa55; }"
-            "QPushButton:hover { background: #0e1e0e; color: #88cc88; }"
-        )
-        save_p_btn.clicked.connect(self._on_save_preset)
-        pre_row.addWidget(save_p_btn)
-
-        self._preset_cb = QComboBox()
-        self._preset_cb.setMinimumWidth(110)
-        self._preset_cb.setStyleSheet(
-            "QComboBox { font-size: 10px; padding: 2px 5px;"
-            " border: 1px solid #2a2a4a; border-radius: 3px;"
-            " background: #0a0a18; color: #8888aa; }"
-            "QComboBox QAbstractItemView { background: #14141e; color: #aaa;"
-            " border: 1px solid #3a3a5a; }"
-        )
-        pre_row.addWidget(self._preset_cb)
-
-        load_p_btn = QPushButton("📂")
-        load_p_btn.setFixedSize(26, 22)
-        load_p_btn.setToolTip("Load selected preset")
-        load_p_btn.setStyleSheet(
-            "QPushButton { font-size: 12px; padding: 0;"
-            " border: 1px solid #2a3a4a; border-radius: 3px;"
-            " background: #0a0e18; color: #5577aa; }"
-            "QPushButton:hover { background: #0e1420; color: #88aadd; }"
-        )
-        load_p_btn.clicked.connect(self._on_load_preset)
-        pre_row.addWidget(load_p_btn)
-
-        del_p_btn = QPushButton("🗑")
-        del_p_btn.setFixedSize(26, 22)
-        del_p_btn.setToolTip("Delete selected preset")
-        del_p_btn.setStyleSheet(
-            "QPushButton { font-size: 12px; padding: 0;"
-            " border: 1px solid #3a2222; border-radius: 3px;"
-            " background: #140a0a; color: #aa4444; }"
-            "QPushButton:hover { background: #1e0e0e; color: #dd6666; }"
-        )
-        del_p_btn.clicked.connect(self._on_delete_preset)
-        pre_row.addWidget(del_p_btn)
-
-        pre_row.addStretch()
-        body_lay.addLayout(pre_row)
 
         self._body.hide()
         root_lay.addWidget(self._body)
@@ -1602,11 +1598,9 @@ class _NewbornQueryBar(QWidget):
         for child in group.children:
             if isinstance(child, FilterBlock):
                 self._add_row(child)
-        # Auto-expand if collapsed
-        if not self._toggle_btn.isChecked():
-            self._toggle_btn.setChecked(True)
-            self._on_toggle(True)
         self._preset_name_edit.setText(name)
+        # Notify parent to clear ms selection
+        self._clear_selection_requested.emit()
 
     def _on_delete_preset(self) -> None:
         from utils.cat_query_filters import delete_preset
@@ -1731,6 +1725,16 @@ class CatManagerWindow(QWidget):
         kill_bar_lay = QHBoxLayout(self._kill_bar)
         kill_bar_lay.setContentsMargins(10, 4, 10, 4)
         kill_bar_lay.setSpacing(6)
+
+        select_all_btn = QPushButton("☑ Select All")
+        select_all_btn.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #4a4a22;"
+            " border-radius: 4px; background: #1a1a08; color: #aaaa55; }"
+            "QPushButton:hover { background: #242410; color: #dddd88; border-color: #8888aa; }"
+        )
+        select_all_btn.clicked.connect(self._select_all_newborns)
+        kill_bar_lay.addWidget(select_all_btn)
+
         kill_bar_lay.addStretch()
         self._kill_count_lbl = QLabel("")
         self._kill_count_lbl.setStyleSheet(
@@ -1742,6 +1746,7 @@ class CatManagerWindow(QWidget):
         # ── Advanced query builder bar (Newborns tab only) ────────────
         self._query_bar = _NewbornQueryBar(_get_query_presets_path())
         self._query_bar.changed.connect(self._rebuild_list)
+        self._query_bar._clear_selection_requested.connect(self._clear_ms_selection)
         self._query_bar.set_cats(self._cats)
         self._query_bar.hide()
 
@@ -2180,6 +2185,26 @@ class CatManagerWindow(QWidget):
                 if (card._cat.room or "(No room)") == room_name:
                     card.set_ms_selected(card._cat in self._ms_selected)
 
+        self._refresh_ms_bar()
+
+    def _select_all_newborns(self):
+        """Select / deselect all currently filtered newborns."""
+        cats = self._filtered_cats()
+        if not cats:
+            return
+        all_selected = all(c in self._ms_selected for c in cats)
+        if all_selected:
+            for cat in cats:
+                self._ms_selected.discard(cat)
+        else:
+            for cat in cats:
+                self._ms_selected.add(cat)
+        # Update card visuals
+        for i in range(self._list_layout.count()):
+            item = self._list_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), _CatCard):
+                card = item.widget()
+                card.set_ms_selected(card._cat in self._ms_selected)
         self._refresh_ms_bar()
 
     def _ms_do_bank(self):
