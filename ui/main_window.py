@@ -15,6 +15,7 @@ from catalogs.itemcatalog import item_catalog
 from utils.loaders import RARITIES
 from app_controller import AppController, EXCLUDED_RARITIES, PURCHASE_COST
 from version import APP_VERSION
+from ui.changelog_panel import ChangelogPanel
 
 # mapping tab label → save_inventories key
 TAB_TO_INV_KEY = {"Storage": "storage", "Trash": "trash", "Bank": "bank"}
@@ -532,6 +533,7 @@ class MainWindow(QMainWindow):
         self.tab_bar.addTab("Bank")
         self.tab_bar.addTab("Pool")
         self.tab_bar.addTab("Save Info")
+        self.tab_bar.addTab("Changelog")
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
 
         # ── Sort toolbar ──────────────────────────────────────────────
@@ -755,9 +757,12 @@ class MainWindow(QMainWindow):
 
         self._save_info_panel = self._build_save_info_panel()
 
+        self._changelog_panel = ChangelogPanel()
+
         self._content_stack = QStackedWidget()
         self._content_stack.addWidget(_grid_page)             # index 0
         self._content_stack.addWidget(self._save_info_panel)  # index 1
+        self._content_stack.addWidget(self._changelog_panel)  # index 2
         left_layout.addWidget(self._content_stack)
 
         # ── Right: detail panel ───────────────────────────────────────
@@ -1585,6 +1590,10 @@ class MainWindow(QMainWindow):
         if label == "Save Info":
             self._content_stack.setCurrentIndex(1)
             self._refresh_save_info()
+        elif label == "Changelog":
+            self._content_stack.setCurrentIndex(2)
+            self._bank_nav_bar.setVisible(False)
+            self._changelog_panel.load_if_needed()
         elif label == "Bank":
             self._content_stack.setCurrentIndex(0)
             self._bank_nav_bar.setVisible(True)
