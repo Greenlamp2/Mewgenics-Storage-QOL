@@ -1659,10 +1659,7 @@ class CatManagerWindow(QWidget):
         fb_lay.setSpacing(6)
 
         self._filter = "house"
-        self._sub_filter       = "all"   # mutation/disorder sub-filter for the "newborns" tab
-        self._gender_filter    = "all"   # gender sub-filter for the "newborns" tab
-        self._sexuality_filter = "all"   # sexuality sub-filter for the "newborns" tab
-        self._tag_filter       = "all"   # tag filter for the "bank" tab
+        self._tag_filter = "all"   # tag filter for the "bank" tab
         _btn_style_active = (
             "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #4caf50;"
             " border-radius: 4px; background: #1a2d1a; color: #4caf50; font-weight: bold; }"
@@ -1726,165 +1723,21 @@ class CatManagerWindow(QWidget):
         bf_btn.clicked.connect(self._on_remove_blood_frenzy)
         fb_lay.addWidget(bf_btn)
 
-        # ── Newborns sub-filter bar (hidden unless "newborns" tab active) ──
-        self._sub_filter_bar = QWidget()
-        self._sub_filter_bar.setStyleSheet(
+        # ── Newborns kill counter bar (hidden unless "newborns" tab active) ──
+        self._kill_bar = QWidget()
+        self._kill_bar.setStyleSheet(
             "QWidget { background: #131308; border-bottom: 1px solid #3a3800; }"
         )
-        sfb_root = QVBoxLayout(self._sub_filter_bar)
-        sfb_root.setContentsMargins(10, 4, 10, 4)
-        sfb_root.setSpacing(3)
-
-        # ── Row 1: mutation / disorder filter ────────────────────────
-        sfb_lay = QHBoxLayout()
-        sfb_lay.setContentsMargins(0, 0, 0, 0)
-        sfb_lay.setSpacing(6)
-
-        sfb_lbl = QLabel("Filter:")
-        sfb_lbl.setStyleSheet("color: #888; font-size: 11px; background: transparent;")
-        sfb_lay.addWidget(sfb_lbl)
-
-        _sf_active = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #e0c060;"
-            " border-radius: 4px; background: #2a2510; color: #e0c060; font-weight: bold; }"
-        )
-        _sf_normal = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #333;"
-            " border-radius: 4px; background: #1a1a14; color: #999; }"
-            "QPushButton:hover { background: #222218; color: #e0c060; }"
-        )
-        self._sub_filter_btn_active_style = _sf_active
-        self._sub_filter_btn_normal_style = _sf_normal
-        self._sub_filter_btns: dict[str, QPushButton] = {}
-
-        for sf_key, sf_label in [
-            ("all",      "🐱 All"),
-            ("defects",  "⚠ Has Disorders"),
-            ("lt8",      "🧬 < 8 Mutations"),
-            ("eq8",      "🧬 8 Mutations"),
-            ("eq9",      "🧬 9 Mutations"),
-            ("eq10",     "🧬 10 Mutations"),
-        ]:
-            sb = QPushButton(sf_label)
-            sb.setStyleSheet(_sf_active if sf_key == "all" else _sf_normal)
-            sb.clicked.connect(lambda _=False, k=sf_key: self._set_sub_filter(k))
-            self._sub_filter_btns[sf_key] = sb
-            sfb_lay.addWidget(sb)
-
-        sfb_lay.addStretch()
-
+        kill_bar_lay = QHBoxLayout(self._kill_bar)
+        kill_bar_lay.setContentsMargins(10, 4, 10, 4)
+        kill_bar_lay.setSpacing(6)
+        kill_bar_lay.addStretch()
         self._kill_count_lbl = QLabel("")
         self._kill_count_lbl.setStyleSheet(
             "color: #cc6666; font-size: 11px; background: transparent;"
         )
-        sfb_lay.addWidget(self._kill_count_lbl)
-        sfb_root.addLayout(sfb_lay)
-
-        # ── Row 2: gender filter ──────────────────────────────────────
-        sgf_lay = QHBoxLayout()
-        sgf_lay.setContentsMargins(0, 0, 0, 0)
-        sgf_lay.setSpacing(6)
-
-        sgf_lbl = QLabel("Gender:")
-        sgf_lbl.setStyleSheet("color: #888; font-size: 11px; background: transparent;")
-        sgf_lay.addWidget(sgf_lbl)
-
-        _gf_active_all = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #e0c060;"
-            " border-radius: 4px; background: #2a2510; color: #e0c060; font-weight: bold; }"
-        )
-        _gf_active_m = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #5b9cf6;"
-            " border-radius: 4px; background: #101828; color: #5b9cf6; font-weight: bold; }"
-        )
-        _gf_active_f = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #f47abf;"
-            " border-radius: 4px; background: #28101e; color: #f47abf; font-weight: bold; }"
-        )
-        _gf_active_d = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #aaaaaa;"
-            " border-radius: 4px; background: #1e1e1e; color: #cccccc; font-weight: bold; }"
-        )
-        _gf_normal = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #333;"
-            " border-radius: 4px; background: #1a1a14; color: #999; }"
-            "QPushButton:hover { background: #1a1a1e; color: #ccccff; }"
-        )
-        self._gender_filter_btn_styles = {
-            "all":    _gf_active_all,
-            "male":   _gf_active_m,
-            "female": _gf_active_f,
-            "ditto":  _gf_active_d,
-        }
-        self._gender_filter_btn_normal = _gf_normal
-        self._gender_filter_btns: dict[str, QPushButton] = {}
-
-        for gf_key, gf_label in [
-            ("all",    "⚥ All"),
-            ("male",   "♂ Male"),
-            ("female", "♀ Female"),
-            ("ditto",  "🔀 Ditto"),
-        ]:
-            gb = QPushButton(gf_label)
-            gb.setStyleSheet(_gf_active_all if gf_key == "all" else _gf_normal)
-            gb.clicked.connect(lambda _=False, k=gf_key: self._set_gender_filter(k))
-            self._gender_filter_btns[gf_key] = gb
-            sgf_lay.addWidget(gb)
-
-        sgf_lay.addStretch()
-        sfb_root.addLayout(sgf_lay)
-
-        # ── Row 3: sexuality filter ───────────────────────────────────
-        ssf_lay = QHBoxLayout()
-        ssf_lay.setContentsMargins(0, 0, 0, 0)
-        ssf_lay.setSpacing(6)
-
-        ssf_lbl = QLabel("Sexuality:")
-        ssf_lbl.setStyleSheet("color: #888; font-size: 11px; background: transparent;")
-        ssf_lay.addWidget(ssf_lbl)
-
-        _sxf_active_all = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #e0c060;"
-            " border-radius: 4px; background: #2a2510; color: #e0c060; font-weight: bold; }"
-        )
-        _sxf_active_gay = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #ff80ab;"
-            " border-radius: 4px; background: #280018; color: #ff80ab; font-weight: bold; }"
-        )
-        _sxf_active_str = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #80d8ff;"
-            " border-radius: 4px; background: #001828; color: #80d8ff; font-weight: bold; }"
-        )
-        _sxf_active_bi = (
-            "QPushButton { font-size: 11px; padding: 2px 10px; border: 1px solid #ce93d8;"
-            " border-radius: 4px; background: #1a0820; color: #ce93d8; font-weight: bold; }"
-        )
-        _sxf_normal = _gf_normal
-        self._sexuality_filter_btn_styles = {
-            "all":      _sxf_active_all,
-            "gay":      _sxf_active_gay,
-            "straight": _sxf_active_str,
-            "bi":       _sxf_active_bi,
-        }
-        self._sexuality_filter_btn_normal = _sxf_normal
-        self._sexuality_filter_btns: dict[str, QPushButton] = {}
-
-        for sx_key, sx_label in [
-            ("all",      "💕 All"),
-            ("straight", "💙 Straight"),
-            ("gay",      "🌈 Gay"),
-            ("bi",       "💜 Bi"),
-        ]:
-            sb2 = QPushButton(sx_label)
-            sb2.setStyleSheet(_sxf_active_all if sx_key == "all" else _sxf_normal)
-            sb2.clicked.connect(lambda _=False, k=sx_key: self._set_sexuality_filter(k))
-            self._sexuality_filter_btns[sx_key] = sb2
-            ssf_lay.addWidget(sb2)
-
-        ssf_lay.addStretch()
-        sfb_root.addLayout(ssf_lay)
-
-        self._sub_filter_bar.hide()
+        kill_bar_lay.addWidget(self._kill_count_lbl)
+        self._kill_bar.hide()
 
         # ── Advanced query builder bar (Newborns tab only) ────────────
         self._query_bar = _NewbornQueryBar(_get_query_presets_path())
@@ -2010,7 +1863,7 @@ class CatManagerWindow(QWidget):
         root_lay.setContentsMargins(0, 0, 0, 0)
         root_lay.setSpacing(0)
         root_lay.addWidget(filter_bar)
-        root_lay.addWidget(self._sub_filter_bar)
+        root_lay.addWidget(self._kill_bar)
         root_lay.addWidget(self._query_bar)
         root_lay.addWidget(self._bank_tag_bar)
         root_lay.addWidget(splitter, 1)
@@ -2038,68 +1891,22 @@ class CatManagerWindow(QWidget):
                     self._filter_btn_active_style if k == key
                     else self._filter_btn_normal_style
                 )
-        # Show/hide sub-filter bar
+        # Show/hide kill bar and query bar
         if key == "newborns":
-            self._sub_filter_bar.show()
+            self._kill_bar.show()
             self._query_bar.show()
             self._bank_tag_bar.hide()
             self._refresh_kill_counter()
         elif key == "bank":
-            self._sub_filter_bar.hide()
+            self._kill_bar.hide()
             self._query_bar.hide()
             self._bank_tag_bar.show()
             self._rebuild_bank_tag_bar()
         else:
-            self._sub_filter_bar.hide()
+            self._kill_bar.hide()
             self._query_bar.hide()
             self._bank_tag_bar.hide()
-            # Reset all sub-filters so they're clean next time
-            self._sub_filter       = "all"
-            self._gender_filter    = "all"
-            self._sexuality_filter = "all"
-            for k, btn in self._sub_filter_btns.items():
-                btn.setStyleSheet(
-                    self._sub_filter_btn_active_style if k == "all"
-                    else self._sub_filter_btn_normal_style
-                )
-            for k, btn in self._gender_filter_btns.items():
-                btn.setStyleSheet(
-                    self._gender_filter_btn_styles["all"] if k == "all"
-                    else self._gender_filter_btn_normal
-                )
-            for k, btn in self._sexuality_filter_btns.items():
-                btn.setStyleSheet(
-                    self._sexuality_filter_btn_styles["all"] if k == "all"
-                    else self._sexuality_filter_btn_normal
-                )
         self._clear_ms_selection()
-        self._rebuild_list()
-
-    def _set_sub_filter(self, key: str):
-        self._sub_filter = key
-        for k, btn in self._sub_filter_btns.items():
-            btn.setStyleSheet(
-                self._sub_filter_btn_active_style if k == key
-                else self._sub_filter_btn_normal_style
-            )
-        self._rebuild_list()
-
-    def _set_gender_filter(self, key: str):
-        self._gender_filter = key
-        for k, btn in self._gender_filter_btns.items():
-            btn.setStyleSheet(
-                self._gender_filter_btn_styles.get(k, self._gender_filter_btn_normal)
-                if k == key else self._gender_filter_btn_normal
-            )
-        self._rebuild_list()
-
-    def _set_sexuality_filter(self, key: str):
-        self._sexuality_filter = key
-        for k, btn in self._sexuality_filter_btns.items():
-            btn.setStyleSheet(
-                self._sexuality_filter_btn_styles.get(k, self._sexuality_filter_btn_normal)
-                if k == key else self._sexuality_filter_btn_normal
-            )
         self._rebuild_list()
 
     def _rebuild_bank_tag_bar(self):
@@ -2171,9 +1978,6 @@ class CatManagerWindow(QWidget):
         cats = filter_cats(
             self._cats,
             self._filter,
-            sub_filter=self._sub_filter,
-            gender_filter=self._gender_filter,
-            sexuality_filter=self._sexuality_filter,
             tag_filter=self._tag_filter,
         )
         # Apply advanced query builder filter (Newborns tab only)
