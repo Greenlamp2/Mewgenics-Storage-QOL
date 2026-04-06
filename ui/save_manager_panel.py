@@ -362,6 +362,9 @@ class SaveManagerPanel(QWidget):
 
         self._build_ui()
 
+        # Auto-register hotkeys on startup (silently; no popup if keyboard is missing)
+        self._register_hotkeys(silent=True)
+
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -454,19 +457,11 @@ class SaveManagerPanel(QWidget):
 
         bottom_layout.addStretch()
 
-        # Hotkey status
+        # Hotkey status (read-only; registration is automatic)
         self._hotkey_lbl = QLabel("⌨️ Hotkeys: not registered")
         self._hotkey_lbl.setStyleSheet("color: #888; font-size: 11px;")
         bottom_layout.addWidget(self._hotkey_lbl)
 
-        self._register_btn = QPushButton("Register F7/F9")
-        self._register_btn.setToolTip(
-            "Register global keyboard shortcuts F7 (Quick Save) and F9 (Quick Load).\n"
-            "These work even when the game is in focus.\n"
-            "Note: may require admin rights on some systems."
-        )
-        self._register_btn.clicked.connect(self._toggle_hotkeys)
-        bottom_layout.addWidget(self._register_btn)
 
         layout.addWidget(bottom_row)
 
@@ -491,7 +486,7 @@ class SaveManagerPanel(QWidget):
         else:
             self._register_hotkeys()
 
-    def _register_hotkeys(self):
+    def _register_hotkeys(self, silent: bool = False):
         try:
             import keyboard
             keyboard.add_hotkey("F7", lambda: self.quick_save_requested.emit())
@@ -499,21 +494,26 @@ class SaveManagerPanel(QWidget):
             self._hotkeys_registered = True
             self._hotkey_lbl.setText("⌨️ Hotkeys: ✅ F7/F9 active")
             self._hotkey_lbl.setStyleSheet("color: #4caf50; font-size: 11px;")
-            self._register_btn.setText("Unregister F7/F9")
             print("[save_manager] Global hotkeys F7/F9 registered.")
         except ImportError:
-            QMessageBox.warning(
-                self, "Keyboard library missing",
+            msg = (
                 "The 'keyboard' package is not installed.\n\n"
                 "Install it with:  pip install keyboard\n\n"
-                "Global hotkeys are not available without it."
+                "Global hotkeys (F7/F9) are not available without it."
             )
+            self._hotkey_lbl.setText("⌨️ Hotkeys: ⚠️ keyboard not installed")
+            self._hotkey_lbl.setStyleSheet("color: #ff9800; font-size: 11px;")
+            if not silent:
+                QMessageBox.warning(self, "Keyboard library missing", msg)
         except Exception as exc:
-            QMessageBox.warning(
-                self, "Hotkey registration failed",
+            msg = (
                 f"Could not register global hotkeys:\n{exc}\n\n"
                 "This may require running the application as administrator."
             )
+            self._hotkey_lbl.setText("⌨️ Hotkeys: ❌ registration failed")
+            self._hotkey_lbl.setStyleSheet("color: #f44336; font-size: 11px;")
+            if not silent:
+                QMessageBox.warning(self, "Hotkey registration failed", msg)
 
     def _unregister_hotkeys(self):
         try:
@@ -525,7 +525,6 @@ class SaveManagerPanel(QWidget):
         self._hotkeys_registered = False
         self._hotkey_lbl.setText("⌨️ Hotkeys: not registered")
         self._hotkey_lbl.setStyleSheet("color: #888; font-size: 11px;")
-        self._register_btn.setText("Register F7/F9")
         print("[save_manager] Global hotkeys unregistered.")
 
     def closeEvent(self, event):
