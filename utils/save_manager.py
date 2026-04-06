@@ -17,6 +17,15 @@ def detect_steam_save_folder():
 WATCH_FOLDER = detect_steam_save_folder()
 TARGET_FILE  = "steamcampaign01.sav"
 TARGET_PATH  = os.path.join(WATCH_FOLDER, TARGET_FILE)
-CUSTOM_FOLDER         = os.path.join(WATCH_FOLDER, "custom")
-TOKENS_BANK_PATH  = os.path.join(CUSTOM_FOLDER, "tokens_bank.json")
-ITEMS_POOL_PATH  = os.path.join(CUSTOM_FOLDER, "items_pool.json")
+CUSTOM_FOLDER             = os.path.join(WATCH_FOLDER, "custom")
+TOKENS_BANK_PATH          = os.path.join(CUSTOM_FOLDER, "tokens_bank.json")
+ITEMS_POOL_PATH           = os.path.join(CUSTOM_FOLDER, "items_pool.json")
+
+# Save-manager backup folders
+NAMED_BACKUPS_FOLDER      = os.path.join(CUSTOM_FOLDER, "named_backups")
+SAFETY_FOLDER             = os.path.join(CUSTOM_FOLDER, "restore_safety")
+SAVE_MANAGER_CONFIG_PATH  = os.path.join(CUSTOM_FOLDER, "save_manager_config.json")
+
+os.makedirs(NAMED_BACKUPS_FOLDER, exist_ok=True)
+os.makedirs(SAFETY_FOLDER,        exist_ok=True)
+
