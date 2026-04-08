@@ -8,7 +8,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
     QSplitter, QPushButton, QGridLayout, QInputDialog, QMessageBox,
-    QComboBox, QLineEdit, QSpinBox,
+    QComboBox, QLineEdit, QSpinBox, QMenu,
 )
 
 from catalogs.stat_catalog import STAT_NAMES
@@ -522,12 +522,36 @@ class _CatDetail(QScrollArea):
                 del_btn.clicked.connect(lambda: self._do_delete_cat(cat))
                 act_row.addWidget(del_btn)
 
-            # ── BloodFrenzy removal ──────────────────────────────────
-            if "BloodFrenzy" in getattr(cat, "disorders", []):
-                bf_btn = _action_btn("🩸 Remove BloodFrenzy", "#882222", "#1e0808", "#ff7777",
-                                     hover_bg="#2a0e0e")
-                bf_btn.clicked.connect(lambda: self._do_remove_blood_frenzy(cat))
-                act_row.addWidget(bf_btn)
+            # ── Generic disorder removal ──────────────────────────────
+            _disorders = list(getattr(cat, "disorders", []))
+            if _disorders:
+                if len(_disorders) == 1:
+                    d_btn = _action_btn(f"🩹 Remove {_disorders[0]}", "#882222", "#1e0808",
+                                        "#ff7777", hover_bg="#2a0e0e")
+                    d_btn.clicked.connect(
+                        lambda checked=False, _d=_disorders[0]: self._do_remove_disorder(cat, _d)
+                    )
+                else:
+                    d_btn = _action_btn("🩹 Heal Disorder ▾", "#882222", "#1e0808",
+                                        "#ff7777", hover_bg="#2a0e0e")
+                    def _show_disorder_menu(checked=False, _cat=cat, _ds=list(_disorders),
+                                            _btn=None):
+                        menu = QMenu(_btn)
+                        menu.setStyleSheet(
+                            "QMenu { background: #1e0808; color: #ff9999;"
+                            " border: 1px solid #882222; }"
+                            "QMenu::item:selected { background: #3a1010; }"
+                        )
+                        for _d in _ds:
+                            act = menu.addAction(f"🩹 {_d}")
+                            act.triggered.connect(
+                                lambda checked=False, __d=_d: self._do_remove_disorder(_cat, __d)
+                            )
+                        menu.exec(_btn.mapToGlobal(_btn.rect().bottomLeft()))
+                    d_btn.clicked.connect(
+                        lambda checked=False, _b=d_btn: _show_disorder_menu(checked, _btn=_b)
+                    )
+                act_row.addWidget(d_btn)
 
             act_row_w = QWidget()
             act_row_w.setStyleSheet("background: transparent;")
@@ -825,26 +849,26 @@ class _CatDetail(QScrollArea):
         self.show_cat(cat)
         self.moved.emit(cat)
 
-    def _do_remove_blood_frenzy(self, cat) -> None:
-        """Remove the BloodFrenzy disorder from *cat* after confirmation."""
+    def _do_remove_disorder(self, cat, disorder_name: str) -> None:
+        """Remove *disorder_name* from *cat* after confirmation."""
         reply = QMessageBox.question(
-            self, "🩸 Remove BloodFrenzy",
-            f"<b>Remove BloodFrenzy from {cat.name}?</b><br><br>"
+            self, f"🩹 Remove {disorder_name}",
+            f"<b>Remove {disorder_name} from {cat.name}?</b><br><br>"
             f"This will permanently modify the cat's save data.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
-            n_modified, _ = self._ctrl.apply_remove_disorder_bulk("BloodFrenzy", cats=[cat])
+            n_modified, _ = self._ctrl.apply_remove_disorder_bulk(disorder_name, cats=[cat])
         except Exception as exc:
-            QMessageBox.critical(self, "Error", f"Could not remove BloodFrenzy:\n{exc}")
+            QMessageBox.critical(self, "Error", f"Could not remove {disorder_name}:\n{exc}")
             return
         if n_modified:
             self.disorder_removed.emit(cat)
         else:
             QMessageBox.warning(self, "Not Found",
-                                "BloodFrenzy was not found in the cat's blob.")
+                                f"{disorder_name} was not found in the cat's blob.")
 
     def _do_delete_cat(self, cat) -> None:
         """Permanently delete *cat* after confirmation."""
@@ -1705,16 +1729,16 @@ class CatManagerWindow(QWidget):
         recv_btn.clicked.connect(self._on_receive_cats)
         fb_lay.addWidget(recv_btn)
 
-        # ── Remove BloodFrenzy button ────────────────────────────────
+        # ── Remove Disorder button ───────────────────────────────────
         _bf_style = (
             "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #aa4444;"
             " border-radius: 4px; background: #2a1010; color: #ff7777; }"
             "QPushButton:hover { background: #3a1515; color: #ffaaaa; }"
         )
-        bf_btn = QPushButton("🩸 Remove BloodFrenzy")
+        bf_btn = QPushButton("🩹 Remove Disorder…")
         bf_btn.setStyleSheet(_bf_style)
-        bf_btn.setToolTip("Remove the BloodFrenzy disorder from all In-House and Adventure cats")
-        bf_btn.clicked.connect(self._on_remove_blood_frenzy)
+        bf_btn.setToolTip("Remove a disorder from all cats in the current tab")
+        bf_btn.clicked.connect(self._on_remove_disorder_bulk)
         fb_lay.addWidget(bf_btn)
 
         # ── Newborns kill counter bar (hidden unless "newborns" tab active) ──
@@ -2524,21 +2548,29 @@ class CatManagerWindow(QWidget):
         else:
             self._kill_count_lbl.setText(f"💀 {kills} killed  ({remaining} until 🪙 +25g)")
 
-    def _on_remove_blood_frenzy(self):
-        """Remove the BloodFrenzy disorder from cats in the currently active filter tab."""
+    def _on_remove_disorder_bulk(self):
+        """Pick a disorder and remove it from cats in the currently active filter tab."""
         if self._ctrl is None:
             return
         current_cats = self._filtered_cats()
-        affected = [
-            c for c in current_cats
-            if "BloodFrenzy" in getattr(c, "disorders", [])
-        ]
-        if not affected:
+        # Collect all unique disorders present in the current tab
+        all_disorders: list[str] = sorted({
+            d for c in current_cats for d in getattr(c, "disorders", [])
+        })
+        if not all_disorders:
             QMessageBox.information(
-                self, "Remove BloodFrenzy",
-                "No cats in the current tab have BloodFrenzy.",
+                self, "Remove Disorder",
+                "No cats in the current tab have any disorders.",
             )
             return
+        disorder_name, ok = QInputDialog.getItem(
+            self, "Remove Disorder",
+            "Select the disorder to remove from the current tab's cats:",
+            all_disorders, 0, False,
+        )
+        if not ok or not disorder_name:
+            return
+        affected = [c for c in current_cats if disorder_name in getattr(c, "disorders", [])]
         tab_label = {
             "house":     "🏠 In House",
             "adventure": "⚔️ Adventure",
@@ -2547,8 +2579,8 @@ class CatManagerWindow(QWidget):
         }.get(self._filter, self._filter)
         names_html = "<br>".join(f"• {c.name}" for c in affected)
         reply = QMessageBox.question(
-            self, "Remove BloodFrenzy",
-            f"<b>Remove BloodFrenzy from {len(affected)} cat(s) in [{tab_label}]?</b>"
+            self, f"Remove {disorder_name}",
+            f"<b>Remove {disorder_name} from {len(affected)} cat(s) in [{tab_label}]?</b>"
             f"<br><br>{names_html}<br><br>"
             f"This will permanently modify their save data.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
@@ -2557,14 +2589,14 @@ class CatManagerWindow(QWidget):
             return
         try:
             n_modified, n_targeted = self._ctrl.apply_remove_disorder_bulk(
-                "BloodFrenzy", cats=current_cats
+                disorder_name, cats=current_cats
             )
         except Exception as exc:
-            QMessageBox.critical(self, "Error", f"Could not remove BloodFrenzy:\n{exc}")
+            QMessageBox.critical(self, "Error", f"Could not remove {disorder_name}:\n{exc}")
             return
         QMessageBox.information(
             self, "Done",
-            f"BloodFrenzy removed from <b>{n_modified}</b> cat(s) "
+            f"{disorder_name} removed from <b>{n_modified}</b> cat(s) "
             f"(checked {n_targeted} cats in [{tab_label}]).",
         )
         self._rebuild_list()
