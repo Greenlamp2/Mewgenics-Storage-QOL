@@ -2128,7 +2128,7 @@ class CatManagerWindow(QWidget):
             self._ms_unbank_btn.setVisible(is_bank)
             self._ms_move_room_btn.setVisible(is_house)
             self._ms_gift_btn.setVisible(is_house or is_bank)
-            self._ms_delete_btn.setVisible(False)
+            self._ms_delete_btn.setVisible(is_house)
             self._ms_tag_btn.setVisible(is_bank)
 
         self._ms_bar.show()
@@ -2375,15 +2375,17 @@ class CatManagerWindow(QWidget):
         QMessageBox.information(self, "Done", f"{moved} cat(s) moved to <b>{_room_display(room)}</b>.")
 
     def _ms_do_delete(self):
-        """Delete all ms-selected newborns."""
+        """Delete all ms-selected cats."""
         cats = list(self._ms_selected)
         if not cats or self._ctrl is None:
             return
         kills_now   = getattr(self._ctrl, "newborn_kill_count", 0)
         next_reward = 10 - (kills_now % 10)
+        is_newborns = self._filter == "newborns"
+        title = "🗑 Delete Newborns" if is_newborns else "🗑 Delete Cats"
         reply = QMessageBox.question(
-            self, "🗑 Delete Newborns",
-            f"<b>Permanently delete {len(cats)} newborn(s)?</b><br><br>"
+            self, title,
+            f"<b>Permanently delete {len(cats)} cat(s)?</b><br><br>"
             f"This cannot be undone.<br>"
             f"Kill counter: <b>{kills_now}</b> — "
             f"next 🪙 25 gold in <b>{next_reward}</b> more kill(s).",
