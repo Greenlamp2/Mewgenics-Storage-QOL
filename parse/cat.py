@@ -414,6 +414,34 @@ class Cat:
         self.inbredness    = 0.0
         self.age           = 2
 
+    # ── Age reset ────────────────────────────────────────────────────────────
+
+    def reset_age(self, current_day: int) -> None:
+        """Patch *creation_day* in the raw blob so that ``age == 2``.
+
+        Only the creation_day field is modified — no genealogy fields are
+        touched.  Uses the same logic as ``strip_genealogy``.
+        Call ``to_blob()`` + ``save_cat()`` afterwards to persist.
+        """
+        target_creation = max(0, current_day - 2)
+        buf = bytearray(self._raw)
+        pos_cd = getattr(self, '_pos_creation_day', None)
+        if pos_cd is None:
+            # Relaxed fallback: same scan as strip_genealogy
+            for offset_from_end in [103, 102, 104, 101, 105, 100, 106, 107, 108, 109, 110]:
+                pos = len(buf) - offset_from_end
+                if pos < 0 or pos + 4 > len(buf):
+                    continue
+                val = struct.unpack_from('<I', buf, pos)[0]
+                if 0 <= val <= 200_000:
+                    pos_cd = pos
+                    break
+        if pos_cd is not None and pos_cd + 4 <= len(buf):
+            struct.pack_into('<I', buf, pos_cd, target_creation)
+            self._pos_creation_day = pos_cd
+            self._raw = bytes(buf)
+        self.age = 2
+
     # ── Disorder removal ─────────────────────────────────────────────────────
 
     def remove_disorder_from_blob(self, disorder_name: str) -> bool:

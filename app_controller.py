@@ -321,6 +321,12 @@ class AppController:
         save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
         save_cat_bank(self.sav_path, self.cat_bank)
 
+        # Reset cat age to 2 (same as receiving a gift)
+        current_day = int(self.save_properties.get("current_day") or 0)
+        cat.reset_age(current_day)
+        from utils.savers import save_cat as _save_cat
+        _save_cat(self.sav_path, cat)
+
         # Update in-memory cat
         cat.status = "In House"
         cat.room   = room_name
@@ -395,6 +401,8 @@ class AppController:
 
     def apply_unbank_cats_multiple(self, cats: list) -> int:
         """Unbank multiple "In Bank" cats in a single write. Returns count unbanked."""
+        from utils.savers import save_cat as _save_cat
+        current_day = int(self.save_properties.get("current_day") or 0)
         unbanked = 0
         for cat in cats:
             if cat.status != "In Bank" or cat.db_key not in self.cat_bank:
@@ -404,6 +412,9 @@ class AppController:
             cat.status = "In House"
             cat.room   = bank_entry['room_name']
             del self.cat_bank[cat.db_key]
+            # Reset age to 2 (same as receiving a gift)
+            cat.reset_age(current_day)
+            _save_cat(self.sav_path, cat)
             unbanked += 1
         if unbanked:
             save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
