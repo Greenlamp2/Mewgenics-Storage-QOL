@@ -13,7 +13,7 @@ from catalogs.itemcatalog import item_catalog
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, \
     load_save_properties, load_cats_count, load_bank_inventory, load_bank_folders, SAVE_INFO_KEYS, \
     load_house_state_raw, load_adventure_keys, load_cats, load_pedigree, \
-    load_current_day, load_cat_bank, load_newborn_kills, load_cat_tags
+    load_current_day, load_cat_bank, load_newborn_kills, load_cat_tags, load_jack_level
 from utils.savers import save_inventories as _save_inventories, save_tokens, \
     save_bank_inventory, save_items_pool, save_bank_folders, save_house_state, \
     save_cat_bank, save_new_cat, save_newborn_kills, save_gold as _save_gold, save_cat_tags
@@ -84,6 +84,9 @@ class AppController:
         self.bank_folders = load_bank_folders(self.sav_path)
         self.save_properties = load_save_properties(self.sav_path, SAVE_INFO_KEYS)
         self.save_properties["_cats_count"] = str(load_cats_count(self.sav_path))
+        _jack_lvl = load_jack_level(self.sav_path)
+        self.save_properties["_jack_level"] = str(_jack_lvl)
+        self.save_properties["_jack_rare_chance"] = str(1 - 0.99 ** _jack_lvl)
 
         # Auto-add storage + trash items into the pool (never overwrite existing entries)
         changed = False

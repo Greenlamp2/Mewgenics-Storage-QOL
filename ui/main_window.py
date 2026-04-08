@@ -68,6 +68,8 @@ SAVE_INFO_FIELDS = [
     ("BonusBirdsKilled",      "Birds Killed",    "🐦", "int"),
     ("current_house_weather", "House Weather",   "🌤", "str"),
     ("_cats_count",           "Cats Seen",       "🐱", "int"),
+    ("_jack_level",           "Jack's Level",    "⚔️", "int"),
+    ("_jack_rare_chance",     "Rare Furniture",  "🪑", "percent"),
 ]
 
 # Cell size used both by QGridLayout items and VirtualItemGrid

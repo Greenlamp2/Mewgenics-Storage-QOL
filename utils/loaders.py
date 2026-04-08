@@ -316,6 +316,21 @@ def load_tokens(sav_path: str) -> dict[str, int]:
 
     return result
 
+def load_jack_level(path: str) -> int:
+    """Return Jack's level: SUM(data) FROM properties WHERE key LIKE 'NPCRSTRACKER_jack_max%'."""
+    if not os.path.exists(path):
+        return 0
+    try:
+        conn = sqlite3.connect(path)
+        row = conn.execute(
+            "SELECT sum(data) FROM properties WHERE key LIKE 'NPCRSTRACKER_jack_max%'"
+        ).fetchone()
+        conn.close()
+        return int(row[0]) if row and row[0] is not None else 0
+    except Exception:
+        return 0
+
+
 def load_newborn_kills(path: str) -> int:
     """Load the cumulative newborn-kill counter from the ``custom`` table."""
     if not os.path.exists(path):
