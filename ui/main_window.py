@@ -1316,6 +1316,8 @@ class MainWindow(QMainWindow):
             self._bank_nav_bar.setVisible(True)
             self._bank_refresh_nav_bar()
             self._populate_bank()
+        elif current_tab == "Saves" or current_tab == "💾 Saves":
+            pass  # Save Manager tab has no inventory grid — nothing to repopulate
         else:
             self._bank_nav_bar.setVisible(False)
             self._populate(self.ctrl.inv_items[current_tab])
