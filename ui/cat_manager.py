@@ -193,8 +193,12 @@ def _equip_item_type(name: str) -> str:
     return "normal"
 
 
-def _equipment_list(items: list) -> QWidget:
-    """Build the equipment section widget with per-item colour coding."""
+def _equipment_list(items: list, on_delete=None) -> QWidget:
+    """Build the equipment section widget with per-item colour coding.
+
+    *on_delete* — optional callable(raw_item_name: str); when provided,
+    cursed and parasite items show an inline 🗑 delete button.
+    """
     w = QWidget()
     w.setStyleSheet("background: transparent;")
     lay = QVBoxLayout(w)
@@ -211,7 +215,31 @@ def _equipment_list(items: list) -> QWidget:
         itype = _equip_item_type(raw_name)
         col, bg, prefix = _EQUIP_DETAIL_STYLE[itype]
         display = prefix + _camel_to_display(raw_name)
-        lay.addWidget(_ability_entry(display, "", bg, col))
+        entry   = _ability_entry(display, "", bg, col)
+
+        if on_delete and itype in ("cursed", "parasite"):
+            row_w = QWidget()
+            row_w.setStyleSheet("background: transparent;")
+            row_lay = QHBoxLayout(row_w)
+            row_lay.setContentsMargins(0, 0, 0, 0)
+            row_lay.setSpacing(4)
+            row_lay.addWidget(entry, 1)
+
+            del_btn = QPushButton("🗑")
+            del_btn.setFixedSize(28, 28)
+            del_btn.setToolTip(f"Remove {_camel_to_display(raw_name)} from equipment")
+            del_btn.setStyleSheet(
+                "QPushButton { background: #2a0808; border: 1px solid #882222;"
+                " color: #cc4444; border-radius: 4px; font-size: 12px; }"
+                "QPushButton:hover { background: #3a1010; border-color: #cc4444; }"
+            )
+            del_btn.clicked.connect(
+                lambda checked=False, _n=raw_name: on_delete(_n)
+            )
+            row_lay.addWidget(del_btn)
+            lay.addWidget(row_w)
+        else:
+            lay.addWidget(entry)
 
     return w
 
@@ -612,6 +640,8 @@ class _CatDetail(QScrollArea):
     deleted = Signal(object, int, int)
     # Emitted after a disorder is removed from the displayed cat
     disorder_removed = Signal(object)   # emits Cat
+    # Emitted after an equipment item is removed from the displayed cat
+    equipment_removed = Signal(object)  # emits Cat
     # Emitted after cat tags are modified
     tagged  = Signal(object)   # emits Cat
 
@@ -861,7 +891,12 @@ class _CatDetail(QScrollArea):
         equipment = getattr(cat, "equipment", [])
         if equipment:
             self._layout.addWidget(_section_label("🎒  Equipment"))
-            self._layout.addWidget(_equipment_list(equipment))
+            self._layout.addWidget(
+                _equipment_list(
+                    equipment,
+                    on_delete=lambda n, _cat=cat: self._do_remove_equipment_item(_cat, n),
+                )
+            )
 
         mutation_chip_items = getattr(cat, "mutation_chip_items", [])
         defect_chip_items   = getattr(cat, "defect_chip_items",   [])
@@ -1066,6 +1101,29 @@ class _CatDetail(QScrollArea):
         else:
             QMessageBox.warning(self, "Not Found",
                                 f"{disorder_name} was not found in the cat's blob.")
+
+    def _do_remove_equipment_item(self, cat, item_name: str) -> None:
+        """Remove *item_name* from *cat*'s equipment slot after confirmation."""
+        display = _camel_to_display(item_name)
+        reply = QMessageBox.question(
+            self, f"🗑 Remove {display}",
+            f"<b>Remove {display} from {cat.name}'s equipment?</b><br><br>"
+            f"The slot will be replaced with an empty placeholder.<br>"
+            f"This permanently modifies the cat's save data.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            ok = self._ctrl.apply_remove_equipment_item(cat, item_name)
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", f"Could not remove {display}:\n{exc}")
+            return
+        if ok:
+            self.equipment_removed.emit(cat)
+        else:
+            QMessageBox.warning(self, "Not Found",
+                                f"{display} was not found in the cat's equipment blob.")
 
     def _do_delete_cat(self, cat) -> None:
         """Permanently delete *cat* after confirmation."""
@@ -2036,6 +2094,7 @@ class CatManagerWindow(QWidget):
         self._detail.moved.connect(self._on_cat_moved)
         self._detail.deleted.connect(self._on_cat_deleted)
         self._detail.disorder_removed.connect(self._on_cat_disorder_removed)
+        self._detail.equipment_removed.connect(self._on_cat_equipment_removed)
         self._detail.tagged.connect(self._on_cat_tagged)
 
         # ── Multi-select action bar (hidden until cats are selected) ─
@@ -2590,6 +2649,10 @@ class CatManagerWindow(QWidget):
     def _on_cat_disorder_removed(self, cat):
         """Called after a disorder is removed from a cat: rebuild list and refresh detail."""
         self._rebuild_list()
+        self._reselect_cat(cat)
+
+    def _on_cat_equipment_removed(self, cat):
+        """Called after an equipment item is removed from a cat: refresh detail panel."""
         self._reselect_cat(cat)
 
     def _on_cat_deleted(self, cat, kill_count: int, gold_awarded: int):
