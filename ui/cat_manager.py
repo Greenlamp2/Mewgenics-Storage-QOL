@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from catalogs.stat_catalog import STAT_NAMES
 from catalogs.ability_catalog import _ABILITY_LOOKUP
+from catalogs.itemcatalog import item_catalog
 
 _GENDER_SYMBOL = {"male": "♂", "female": "♀", "?": "⚥"}
 _GENDER_COLOR  = {"male": "#5b9cf6", "female": "#f47abf", "?": "#aaaaaa"}
@@ -173,6 +174,48 @@ def _ability_entry(name: str, desc: str, bg: str, name_color: str, desc_color: s
     return w
 
 
+# Per-type visual style for equipment items in the detail panel
+# (text_color, bg_color, prefix)
+_EQUIP_DETAIL_STYLE: dict[str, tuple[str, str, str]] = {
+    "normal":   ("#b0a0e0", "#1a1a2a", ""),
+    "cursed":   ("#cc44ff", "#1e0a2e", "☠  "),
+    "parasite": ("#88cc44", "#0a1e08", "✦  "),
+}
+
+
+def _equip_item_type(name: str) -> str:
+    """Return 'cursed', 'parasite', or 'normal' for a raw item name."""
+    cat_name = item_catalog.get_category(name)
+    if cat_name == "cursed":
+        return "cursed"
+    if cat_name == "parasites":
+        return "parasite"
+    return "normal"
+
+
+def _equipment_list(items: list) -> QWidget:
+    """Build the equipment section widget with per-item colour coding."""
+    w = QWidget()
+    w.setStyleSheet("background: transparent;")
+    lay = QVBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(4)
+
+    if not items:
+        none_lbl = QLabel("—")
+        none_lbl.setStyleSheet("color: #666; font-size: 12px; background: transparent;")
+        lay.addWidget(none_lbl)
+        return w
+
+    for raw_name in items:
+        itype = _equip_item_type(raw_name)
+        col, bg, prefix = _EQUIP_DETAIL_STYLE[itype]
+        display = prefix + _camel_to_display(raw_name)
+        lay.addWidget(_ability_entry(display, "", bg, col))
+
+    return w
+
+
 def _ability_list(
     items,
     bg: str,
@@ -246,6 +289,13 @@ class _RoomHeader(QWidget):
 # Cat list card
 # ------------------------------------------------------------------
 
+def _camel_to_display(name: str) -> str:
+    """Split CamelCase item name into spaced words for compact display."""
+    s = re.sub(r'([A-Z])', r' \1', name).strip()
+    # Collapse multiple spaces
+    return re.sub(r'\s+', ' ', s)
+
+
 class _CatCard(QFrame):
     """Compact clickable cat card — paint-only, zero child widgets for maximum performance."""
     selected   = Signal(object)        # regular left-click → show detail
@@ -256,6 +306,11 @@ class _CatCard(QFrame):
     _F_NAME:   QFont | None = None
     _F_SUB:    QFont | None = None
     _F_BADGE:  QFont | None = None
+    _F_EQUIP:  QFont | None = None
+
+    # Card height constants
+    _H_BASE  = 58   # no equipment
+    _H_EQUIP = 76   # with equipment line
 
     @classmethod
     def _ensure_fonts(cls):
@@ -264,6 +319,7 @@ class _CatCard(QFrame):
             cls._F_NAME   = QFont(); cls._F_NAME.setPixelSize(13);   cls._F_NAME.setBold(True)
             cls._F_SUB    = QFont(); cls._F_SUB.setPixelSize(11)
             cls._F_BADGE  = QFont(); cls._F_BADGE.setPixelSize(10)
+            cls._F_EQUIP  = QFont(); cls._F_EQUIP.setPixelSize(10); cls._F_EQUIP.setItalic(True)
 
     def __init__(self, cat, parent=None):
         super().__init__(parent)
@@ -273,7 +329,6 @@ class _CatCard(QFrame):
         self._ms_selected = False
         self._hovering    = False
 
-        self.setFixedHeight(58)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         # Pre-compute all display data once at construction time
@@ -285,6 +340,27 @@ class _CatCard(QFrame):
         room_text          = _room_display(cat.room) if (cat.room and cat.room != status) else status
         self._sub_text     = f"{_STATUS_ICON.get(status, '')} {room_text}"
         self._sub_color    = _STATUS_COLOR.get(status, "#888888")
+
+        # Equipment items — only shown for adventure cats.
+        # Each entry: (display_name: str, item_type: str)
+        # item_type is one of: "normal", "cursed", "parasite"
+        raw_equip = list(getattr(cat, "equipment", []))
+        if status == "Adventure" and raw_equip:
+            def _equip_type(name: str) -> str:
+                cat_name = item_catalog.get_category(name)
+                if cat_name == "cursed":
+                    return "cursed"
+                if cat_name == "parasites":
+                    return "parasite"
+                return "normal"
+            self._equip_items: list[tuple[str, str]] = [
+                (_camel_to_display(n), _equip_type(n))
+                for n in raw_equip
+            ]
+            self.setFixedHeight(self._H_EQUIP)
+        else:
+            self._equip_items = []
+            self.setFixedHeight(self._H_BASE)
 
         mut_count = len(getattr(cat, "mutation_chip_items", []))
         def_count = len(getattr(cat, "defect_chip_items",   []))
@@ -358,6 +434,7 @@ class _CatCard(QFrame):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         W, H = self.width(), self.height()
+        has_equip = bool(self._equip_items)
 
         # Background & border
         if self._ms_selected:
@@ -373,16 +450,30 @@ class _CatCard(QFrame):
         p.setPen(QPen(QColor(bd), bw))
         p.drawRoundedRect(bw - 1, bw - 1, W - bw, H - bw, 6, 6)
 
-        # Gender symbol
+        # When equipment is shown, the top rows are slightly compressed
+        # to leave room for the equipment line at the bottom.
+        if has_equip:
+            name_y, name_h  = 4,  18
+            sub_y,  sub_h   = 24, 15
+            badge_row_y     = 4   # badges aligned to name row top
+            badge_row_h     = 35  # height of the name+sub block
+        else:
+            name_y, name_h  = 7,  20
+            sub_y,  sub_h   = 31, 18
+            badge_row_y     = 0
+            badge_row_h     = H
+
+        # Gender symbol — spans the full name+sub block vertically
         p.setFont(self._F_GENDER)
         p.setPen(QColor(self._gender_color))
-        p.drawText(QRect(6, 0, 32, H), Qt.AlignmentFlag.AlignCenter, self._gender_sym)
+        gend_h = (sub_y + sub_h) - name_y
+        p.drawText(QRect(6, name_y, 32, gend_h), Qt.AlignmentFlag.AlignCenter, self._gender_sym)
 
         # Name
         p.setFont(self._F_NAME)
         p.setPen(QColor("#e8e8e8"))
         p.drawText(
-            QRect(44, 7, W - 48 - self._right_reserved, 20),
+            QRect(44, name_y, W - 48 - self._right_reserved, name_h),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             self._name,
         )
@@ -391,20 +482,87 @@ class _CatCard(QFrame):
         p.setFont(self._F_SUB)
         p.setPen(QColor(self._sub_color))
         p.drawText(
-            QRect(44, 31, W - 48 - self._right_reserved, 18),
+            QRect(44, sub_y, W - 48 - self._right_reserved, sub_h),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             self._sub_text,
         )
+
+        # Equipment line (adventure cats only) — each item rendered individually
+        # so cursed/parasite items can have a distinct visual style.
+        if has_equip:
+            # Thin separator
+            p.setPen(QPen(QColor("#2a2a1a"), 1))
+            sep_y = sub_y + sub_h + 3
+            p.drawLine(44, sep_y, W - 8, sep_y)
+
+            equip_y = sep_y + 2
+            equip_h = H - equip_y - 2
+            p.setFont(self._F_EQUIP)
+            fm_eq   = QFontMetrics(self._F_EQUIP)
+
+            # Per-type style: (text_color, pill_bg, pill_border, prefix)
+            _STYLES = {
+                "normal":   ("#c8a850", None,      None,      ""),
+                "cursed":   ("#cc44ff", "#1e0a2e", "#6a1a9a", "☠ "),
+                "parasite": ("#88cc44", "#0a1e08", "#2a6010", "✦ "),
+            }
+            _COL_SEP = QColor("#665533")
+
+            sep_text = " · "
+            sep_w    = fm_eq.horizontalAdvance(sep_text)
+            max_x    = W - 8
+            x_eq     = 44
+
+            for i, (dname, itype) in enumerate(self._equip_items):
+                col_hex, pill_bg, pill_bd, prefix = _STYLES.get(itype, _STYLES["normal"])
+
+                # Separator between items
+                if i > 0:
+                    if x_eq + sep_w >= max_x:
+                        p.setPen(_COL_SEP)
+                        p.drawText(QRect(x_eq, equip_y, max_x - x_eq, equip_h),
+                                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "…")
+                        break
+                    p.setPen(_COL_SEP)
+                    p.drawText(QRect(x_eq, equip_y, sep_w, equip_h),
+                               Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, sep_text)
+                    x_eq += sep_w
+
+                display = prefix + dname
+                item_w  = fm_eq.horizontalAdvance(display)
+                avail   = max_x - x_eq
+
+                if avail <= 0:
+                    break
+
+                if item_w > avail:
+                    display = fm_eq.elidedText(display, Qt.TextElideMode.ElideRight, avail)
+                    item_w  = avail
+
+                # Draw background pill for cursed / parasite items
+                if pill_bg:
+                    pill_r = QRect(x_eq - 2, equip_y + 1, item_w + 4, equip_h - 2)
+                    p.setBrush(QBrush(QColor(pill_bg)))
+                    p.setPen(QPen(QColor(pill_bd), 1))
+                    p.drawRoundedRect(pill_r, 3, 3)
+
+                p.setPen(QColor(col_hex))
+                p.drawText(QRect(x_eq, equip_y, item_w, equip_h),
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, display)
+                x_eq += item_w
 
         # Right-side badges & tags
         p.setFont(self._F_BADGE)
         fm = QFontMetrics(self._F_BADGE)
         x = W - 8
+        # Vertically centre badges in the name+sub block
+        badge_mid = badge_row_y + badge_row_h // 2
+        ry_base = badge_mid - 8  # half of badge height (16px)
 
         for tt in self._tag_texts:
             tw = fm.horizontalAdvance(tt) + 10
             x -= tw + 3
-            ry = (H - 16) // 2
+            ry = ry_base
             p.setBrush(QBrush(QColor("#0e2018")))
             p.setPen(QPen(QColor("#2a6040"), 1))
             p.drawRoundedRect(x, ry, tw, 16, 3, 3)
@@ -415,7 +573,7 @@ class _CatCard(QFrame):
             ot = f"+{self._tag_overflow}"
             ow = fm.horizontalAdvance(ot) + 8
             x -= ow + 3
-            ry = (H - 16) // 2
+            ry = ry_base
             p.setBrush(QBrush(QColor("#0a1810")))
             p.setPen(QPen(QColor("#1a4030"), 1))
             p.drawRoundedRect(x, ry, ow, 16, 3, 3)
@@ -425,7 +583,7 @@ class _CatCard(QFrame):
         for text, fg, bg_c, border in self._badges:
             tw = fm.horizontalAdvance(text) + 10
             x -= tw + 3
-            ry = (H - 16) // 2
+            ry = ry_base
             p.setBrush(QBrush(QColor(bg_c)))
             p.setPen(QPen(QColor(border), 1))
             p.drawRoundedRect(x, ry, tw, 16, 3, 3)
@@ -703,9 +861,7 @@ class _CatDetail(QScrollArea):
         equipment = getattr(cat, "equipment", [])
         if equipment:
             self._layout.addWidget(_section_label("🎒  Equipment"))
-            self._layout.addWidget(
-                _ability_list(equipment, "#1a1a2a", "#b0a0e0", use_catalog=False)
-            )
+            self._layout.addWidget(_equipment_list(equipment))
 
         mutation_chip_items = getattr(cat, "mutation_chip_items", [])
         defect_chip_items   = getattr(cat, "defect_chip_items",   [])

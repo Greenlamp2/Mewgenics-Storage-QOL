@@ -256,10 +256,34 @@ class Cat:
 
             self.passive_abilities = passives
             self.disorders = disorders
-            self.equipment = []   # equipment parsing requires separate byte-marker logic
-            # if self.name == 'Princess':
-            if self.name == 'Sydney':
-                print('')
+
+            # ── Equipment inventory (embedded after disorder data) ────────────
+            # Format: u32 count, then items identical to inventory_storage
+            # but WITHOUT a leading version u32.
+            # Slots include all equipped items (weapons, armour, face, parasites…).
+            # "None" placeholders are filtered out by _valid_str.
+            self.equipment: list[str] = []
+            try:
+                eq_count = r.u32()
+                if 1 <= eq_count <= 10:  # sanity check
+                    for eq_i in range(eq_count):
+                        r.skip(1)       # flag byte (always 1)
+                        eq_name = r.str() or ""
+                        r.str()         # subname (discard)
+                        r.i32()         # charges
+                        r.u32()         # field1
+                        r.u32()         # field2
+                        r.u32()         # seqId
+                        r.u8()          # tailByte
+                        r.u8()          # sep_flag
+                        if eq_i < eq_count - 1:
+                            r.u32()     # version separator between items
+                        if eq_name and _valid_str(eq_name):
+                            self.equipment.append(eq_name)
+                else:
+                    self.equipment = []
+            except Exception:
+                self.equipment = []
 
         else:
             # Fallback: old heuristic scan for any uppercase-starting ASCII string
