@@ -3,8 +3,8 @@
 import os
 import re
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, Signal, QRect, QTimer, QThread
+from PySide6.QtGui import QIcon, QPainter, QPen, QColor, QFont, QFontMetrics, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
     QSplitter, QPushButton, QGridLayout, QInputDialog, QMessageBox,
@@ -247,141 +247,100 @@ class _RoomHeader(QWidget):
 # ------------------------------------------------------------------
 
 class _CatCard(QFrame):
-    """Compact clickable cat card shown in the list."""
+    """Compact clickable cat card — paint-only, zero child widgets for maximum performance."""
     selected   = Signal(object)        # regular left-click → show detail
     ms_toggled = Signal(object, bool)  # Ctrl+click → (cat, is_now_selected)
 
-    _NORMAL = "QFrame { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; }"
-    _HOVER  = "QFrame { background: #242424; border: 1px solid #555; border-radius: 6px; }"
-    _ACTIVE = "QFrame { background: #1a2a1a; border: 1px solid #4caf50; border-radius: 6px; }"
-    _MS_SEL = "QFrame { background: #1a1a2e; border: 2px solid #7777ee; border-radius: 6px; }"
+    # Class-level shared fonts (created once, reused across all instances)
+    _F_GENDER: QFont | None = None
+    _F_NAME:   QFont | None = None
+    _F_SUB:    QFont | None = None
+    _F_BADGE:  QFont | None = None
+
+    @classmethod
+    def _ensure_fonts(cls):
+        if cls._F_GENDER is None:
+            cls._F_GENDER = QFont(); cls._F_GENDER.setPixelSize(18); cls._F_GENDER.setBold(True)
+            cls._F_NAME   = QFont(); cls._F_NAME.setPixelSize(13);   cls._F_NAME.setBold(True)
+            cls._F_SUB    = QFont(); cls._F_SUB.setPixelSize(11)
+            cls._F_BADGE  = QFont(); cls._F_BADGE.setPixelSize(10)
 
     def __init__(self, cat, parent=None):
         super().__init__(parent)
+        self._ensure_fonts()
         self._cat         = cat
         self._active      = False
         self._ms_selected = False
+        self._hovering    = False
+
         self.setFixedHeight(58)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(self._NORMAL)
 
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 6, 10, 6)
-        lay.setSpacing(8)
-
+        # Pre-compute all display data once at construction time
         g = cat.gender
-        g_lbl = QLabel(_GENDER_SYMBOL.get(g, "?"))
-        g_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        g_lbl.setFixedSize(28, 28)
-        g_lbl.setStyleSheet(
-            f"background: transparent; color: {_GENDER_COLOR.get(g, '#aaa')};"
-            f" font-size: 18px; font-weight: bold;"
-        )
-        lay.addWidget(g_lbl)
+        self._gender_sym   = _GENDER_SYMBOL.get(g, "?")
+        self._gender_color = _GENDER_COLOR.get(g, "#aaaaaa")
+        self._name         = cat.name or "(unknown)"
+        status             = cat.status
+        room_text          = _room_display(cat.room) if (cat.room and cat.room != status) else status
+        self._sub_text     = f"{_STATUS_ICON.get(status, '')} {room_text}"
+        self._sub_color    = _STATUS_COLOR.get(status, "#888888")
 
-        center = QVBoxLayout()
-        center.setSpacing(2)
-        self._name_lbl = QLabel(cat.name or "(unknown)")
-        self._name_lbl.setStyleSheet(
-            "color: #e8e8e8; font-size: 13px; font-weight: bold; background: transparent;"
-        )
-        center.addWidget(self._name_lbl)
-
-        status = cat.status
-        room_text = _room_display(cat.room) if cat.room and cat.room != status else status
-        sub_lbl = QLabel(f"{_STATUS_ICON.get(status, '')}  {room_text}")
-        sub_lbl.setStyleSheet(
-            f"color: {_STATUS_COLOR.get(status, '#888')}; font-size: 11px; background: transparent;"
-        )
-        center.addWidget(sub_lbl)
-        lay.addLayout(center, 1)
-
-        # ── Right-side badges: mutation count + defect + disorder indicators ────
         mut_count = len(getattr(cat, "mutation_chip_items", []))
         def_count = len(getattr(cat, "defect_chip_items",   []))
         dis_count = len(getattr(cat, "disorders",           []))
 
-        badge_parts = []
-        if mut_count > 0:
-            badge_parts.append((f"🧬 {mut_count}", "#80bbdd", "#0e1a22", "#2a4a5a"))
-        if def_count > 0:
-            badge_parts.append((f"⚡ {def_count}", "#e0a030", "#221800", "#5a3a00"))
+        # Badges: (text, fg, bg, border) — drawn right-to-left
+        self._badges: list[tuple[str, str, str, str]] = []
         if dis_count > 0:
-            badge_parts.append((f"⚠ {dis_count}", "#e05050", "#220e0e", "#5a1a1a"))
+            self._badges.append((f"⚠ {dis_count}", "#e05050", "#220e0e", "#5a1a1a"))
+        if def_count > 0:
+            self._badges.append((f"⚡ {def_count}", "#e0a030", "#221800", "#5a3a00"))
+        if mut_count > 0:
+            self._badges.append((f"🧬 {mut_count}", "#80bbdd", "#0e1a22", "#2a4a5a"))
 
-        if badge_parts:
-            badges_row = QHBoxLayout()
-            badges_row.setSpacing(3)
-            badges_row.setContentsMargins(0, 0, 0, 0)
-            badges_row.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
-            for text, fg, bg, border in badge_parts:
-                lbl = QLabel(text)
-                lbl.setStyleSheet(
-                    f"color: {fg}; font-size: 10px; background: {bg};"
-                    f" border: 1px solid {border}; border-radius: 3px; padding: 1px 4px;"
-                )
-                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                badges_row.addWidget(lbl)
-            badges_w = QWidget()
-            badges_w.setStyleSheet("background: transparent;")
-            badges_w.setLayout(badges_row)
-            lay.addWidget(badges_w)
+        cat_tags = list(getattr(cat, "tags", []))
+        self._tag_texts    = [f"🏷 {t}" for t in cat_tags[:3]]
+        self._tag_overflow = max(0, len(cat_tags) - 3)
 
-        # ── Tag badges (only when cat has tags) ──────────────────────
-        cat_tags = getattr(cat, "tags", [])
-        if cat_tags:
-            tags_row = QHBoxLayout()
-            tags_row.setSpacing(2)
-            tags_row.setContentsMargins(0, 0, 0, 0)
-            tags_row.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
-            for tag in cat_tags[:3]:  # show at most 3 tags to keep card compact
-                t_lbl = QLabel(f"🏷 {tag}")
-                t_lbl.setStyleSheet(
-                    "color: #80e0a0; font-size: 9px; background: #0e2018;"
-                    " border: 1px solid #2a6040; border-radius: 3px; padding: 1px 3px;"
-                )
-                t_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                tags_row.addWidget(t_lbl)
-            if len(cat_tags) > 3:
-                more_lbl = QLabel(f"+{len(cat_tags) - 3}")
-                more_lbl.setStyleSheet(
-                    "color: #60b080; font-size: 9px; background: #0a1810;"
-                    " border: 1px solid #1a4030; border-radius: 3px; padding: 1px 3px;"
-                )
-                tags_row.addWidget(more_lbl)
-            tags_w = QWidget()
-            tags_w.setStyleSheet("background: transparent;")
-            tags_w.setLayout(tags_row)
-            lay.addWidget(tags_w)
+        # Pre-compute right-side reserved width so name/sub text doesn't overlap badges
+        fm = QFontMetrics(self._F_BADGE)
+        right = 10
+        for text, *_ in self._badges:
+            right += fm.horizontalAdvance(text) + 13
+        for tt in self._tag_texts:
+            right += fm.horizontalAdvance(tt) + 13
+        if self._tag_overflow:
+            right += fm.horizontalAdvance(f"+{self._tag_overflow}") + 11
+        self._right_reserved = right
 
     def update_name(self):
-        """Refresh the displayed name from the underlying cat object."""
-        self._name_lbl.setText(self._cat.name or "(unknown)")
+        self._name = self._cat.name or "(unknown)"
+        self.update()
 
-    def _update_style(self):
-        if self._ms_selected:
-            self.setStyleSheet(self._MS_SEL)
-        elif self._active:
-            self.setStyleSheet(self._ACTIVE)
-        else:
-            self.setStyleSheet(self._NORMAL)
+    # ── Visual state ─────────────────────────────────────────────────
 
     def set_active(self, active: bool):
-        self._active = active
-        self._update_style()
+        if self._active != active:
+            self._active = active
+            self.update()
 
     def set_ms_selected(self, selected: bool):
-        self._ms_selected = selected
-        self._update_style()
+        if self._ms_selected != selected:
+            self._ms_selected = selected
+            self.update()
+
+    def _update_style(self):
+        self.update()
 
     def enterEvent(self, event):
-        if not self._ms_selected and not self._active:
-            self.setStyleSheet(self._HOVER)
+        self._hovering = True
+        self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        if not self._ms_selected and not self._active:
-            self.setStyleSheet(self._NORMAL)
+        self._hovering = False
+        self.update()
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
@@ -392,6 +351,88 @@ class _CatCard(QFrame):
             else:
                 self.selected.emit(self._cat)
         super().mousePressEvent(event)
+
+    # ── Paint ─────────────────────────────────────────────────────────
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W, H = self.width(), self.height()
+
+        # Background & border
+        if self._ms_selected:
+            bg, bd, bw = "#1a1a2e", "#7777ee", 2
+        elif self._active:
+            bg, bd, bw = "#1a2a1a", "#4caf50", 1
+        elif self._hovering:
+            bg, bd, bw = "#242424", "#555555", 1
+        else:
+            bg, bd, bw = "#1c1c1c", "#333333", 1
+
+        p.setBrush(QBrush(QColor(bg)))
+        p.setPen(QPen(QColor(bd), bw))
+        p.drawRoundedRect(bw - 1, bw - 1, W - bw, H - bw, 6, 6)
+
+        # Gender symbol
+        p.setFont(self._F_GENDER)
+        p.setPen(QColor(self._gender_color))
+        p.drawText(QRect(6, 0, 32, H), Qt.AlignmentFlag.AlignCenter, self._gender_sym)
+
+        # Name
+        p.setFont(self._F_NAME)
+        p.setPen(QColor("#e8e8e8"))
+        p.drawText(
+            QRect(44, 7, W - 48 - self._right_reserved, 20),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self._name,
+        )
+
+        # Sub-label (status / room)
+        p.setFont(self._F_SUB)
+        p.setPen(QColor(self._sub_color))
+        p.drawText(
+            QRect(44, 31, W - 48 - self._right_reserved, 18),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self._sub_text,
+        )
+
+        # Right-side badges & tags
+        p.setFont(self._F_BADGE)
+        fm = QFontMetrics(self._F_BADGE)
+        x = W - 8
+
+        for tt in self._tag_texts:
+            tw = fm.horizontalAdvance(tt) + 10
+            x -= tw + 3
+            ry = (H - 16) // 2
+            p.setBrush(QBrush(QColor("#0e2018")))
+            p.setPen(QPen(QColor("#2a6040"), 1))
+            p.drawRoundedRect(x, ry, tw, 16, 3, 3)
+            p.setPen(QColor("#80e0a0"))
+            p.drawText(QRect(x, ry, tw, 16), Qt.AlignmentFlag.AlignCenter, tt)
+
+        if self._tag_overflow:
+            ot = f"+{self._tag_overflow}"
+            ow = fm.horizontalAdvance(ot) + 8
+            x -= ow + 3
+            ry = (H - 16) // 2
+            p.setBrush(QBrush(QColor("#0a1810")))
+            p.setPen(QPen(QColor("#1a4030"), 1))
+            p.drawRoundedRect(x, ry, ow, 16, 3, 3)
+            p.setPen(QColor("#60b080"))
+            p.drawText(QRect(x, ry, ow, 16), Qt.AlignmentFlag.AlignCenter, ot)
+
+        for text, fg, bg_c, border in self._badges:
+            tw = fm.horizontalAdvance(text) + 10
+            x -= tw + 3
+            ry = (H - 16) // 2
+            p.setBrush(QBrush(QColor(bg_c)))
+            p.setPen(QPen(QColor(border), 1))
+            p.drawRoundedRect(x, ry, tw, 16, 3, 3)
+            p.setPen(QColor(fg))
+            p.drawText(QRect(x, ry, tw, 16), Qt.AlignmentFlag.AlignCenter, text)
+
+        p.end()
 
 
 # ------------------------------------------------------------------
@@ -1647,6 +1688,27 @@ class _NewbornQueryBar(QWidget):
 
 
 # ------------------------------------------------------------------
+# Background cat-loading thread
+# ------------------------------------------------------------------
+
+class _CatLoaderThread(QThread):
+    """Runs ctrl.load_cats_data() off the main thread so the UI stays responsive."""
+    finished = Signal()
+    error    = Signal(str)
+
+    def __init__(self, ctrl, parent=None):
+        super().__init__(parent)
+        self._ctrl = ctrl
+
+    def run(self):
+        try:
+            self._ctrl.load_cats_data()
+            self.finished.emit()
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+# ------------------------------------------------------------------
 # Main Cat Manager window
 # ------------------------------------------------------------------
 
@@ -1663,6 +1725,9 @@ class CatManagerWindow(QWidget):
         self.setWindowIcon(QIcon(_icon))
         self.resize(1050, 680)
         self.setStyleSheet("QWidget { background: #111111; color: #dddddd; }")
+
+        self._loader_thread: _CatLoaderThread | None = None
+        self._is_loading = False
 
         self._cats = cats
         self._ctrl = ctrl
@@ -1897,7 +1962,8 @@ class CatManagerWindow(QWidget):
         root_lay.addWidget(self._bank_tag_bar)
         root_lay.addWidget(splitter, 1)
 
-        self._rebuild_list()
+        # Defer the initial list build so the window frame appears immediately.
+        QTimer.singleShot(0, self._rebuild_list)
 
     # ── Filter ───────────────────────────────────────────────────────
 
@@ -2020,60 +2086,76 @@ class CatManagerWindow(QWidget):
     # ── List ─────────────────────────────────────────────────────────
 
     def _rebuild_list(self):
-        while self._list_layout.count():
-            item = self._list_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self._list_container.setUpdatesEnabled(False)
+        try:
+            while self._list_layout.count():
+                item = self._list_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
 
-        self._active_card = None
-        # Keep ms_selected set intact across rebuilds — only clear it explicitly
+            self._active_card = None
 
-        cats = self._filtered_cats()
-        self._count_lbl.setText(f"{len(cats)} cat(s)")
+            # ── Loading state ─────────────────────────────────────────
+            if self._is_loading:
+                spinner = QLabel("⏳  Loading cats…")
+                spinner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                spinner.setStyleSheet(
+                    "color: #888; font-size: 14px; padding: 40px; background: transparent;"
+                )
+                self._list_layout.addWidget(spinner)
+                self._count_lbl.setText("Loading…")
+                self._refresh_ms_bar()
+                return
 
-        if not cats:
-            empty = QLabel("No cats found.")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty.setStyleSheet("color: #555; font-size: 13px; padding: 30px;")
-            self._list_layout.addWidget(empty)
-            self._refresh_ms_bar()
-            return
+            # Keep ms_selected set intact across rebuilds — only clear it explicitly
+            cats = self._filtered_cats()
+            self._count_lbl.setText(f"{len(cats)} cat(s)")
 
-        def _add_card(cat):
-            card = _CatCard(cat)
-            card.selected.connect(self._on_cat_selected)
-            card.ms_toggled.connect(self._on_card_ms_toggled)
-            if cat in self._ms_selected:
-                card.set_ms_selected(True)
-            self._list_layout.addWidget(card)
+            if not cats:
+                empty = QLabel("No cats found.")
+                empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                empty.setStyleSheet("color: #555; font-size: 13px; padding: 30px;")
+                self._list_layout.addWidget(empty)
+                self._refresh_ms_bar()
+                return
 
-        if self._filter in ("house", "bank"):
-            # Group by room, rooms sorted alphabetically; cats within each room also sorted
-            rooms: dict[str, list] = {}
-            for cat in sorted(cats, key=lambda c: ((c.room or "").lower(), (c.name or "").lower())):
-                key = cat.room or "(No room)"
-                rooms.setdefault(key, []).append(cat)
+            def _add_card(cat):
+                card = _CatCard(cat)
+                card.selected.connect(self._on_cat_selected)
+                card.ms_toggled.connect(self._on_card_ms_toggled)
+                if cat in self._ms_selected:
+                    card.set_ms_selected(True)
+                self._list_layout.addWidget(card)
 
-            for room_name, room_cats in rooms.items():
-                all_sel = all(c in self._ms_selected for c in room_cats)
-                header = _RoomHeader(room_name, len(room_cats), all_selected=all_sel)
-                header.select_all_clicked.connect(self._on_select_room)
-                self._list_layout.addWidget(header)
-                for cat in room_cats:
+            if self._filter in ("house", "bank"):
+                # Group by room, rooms sorted alphabetically; cats within each room also sorted
+                rooms: dict[str, list] = {}
+                for cat in sorted(cats, key=lambda c: ((c.room or "").lower(), (c.name or "").lower())):
+                    key = cat.room or "(No room)"
+                    rooms.setdefault(key, []).append(cat)
+
+                for room_name, room_cats in rooms.items():
+                    all_sel = all(c in self._ms_selected for c in room_cats)
+                    header = _RoomHeader(room_name, len(room_cats), all_selected=all_sel)
+                    header.select_all_clicked.connect(self._on_select_room)
+                    self._list_layout.addWidget(header)
+                    for cat in room_cats:
+                        _add_card(cat)
+            elif self._filter == "newborns":
+                # Sort by mutation count descending, then name
+                for cat in sorted(
+                    cats,
+                    key=lambda c: (-len(getattr(c, "mutation_chip_items", [])), (c.name or "").lower())
+                ):
                     _add_card(cat)
-        elif self._filter == "newborns":
-            # Sort by mutation count descending, then name
-            for cat in sorted(
-                cats,
-                key=lambda c: (-len(getattr(c, "mutation_chip_items", [])), (c.name or "").lower())
-            ):
-                _add_card(cat)
-        else:
-            for cat in sorted(cats, key=lambda c: (c.name or "").lower()):
-                _add_card(cat)
+            else:
+                for cat in sorted(cats, key=lambda c: (c.name or "").lower()):
+                    _add_card(cat)
 
-        self._list_layout.addStretch()
-        self._refresh_ms_bar()
+            self._list_layout.addStretch()
+            self._refresh_ms_bar()
+        finally:
+            self._list_container.setUpdatesEnabled(True)
 
     def _on_cat_selected(self, cat):
         # Clear ms selection on a normal (non-Ctrl) click
@@ -2650,3 +2732,42 @@ class CatManagerWindow(QWidget):
         self._ms_selected.clear()
         self._query_bar.set_cats(cats)
         self._rebuild_list()
+
+    # ── Background loading ────────────────────────────────────────────
+
+    def start_loading(self, ctrl):
+        """Show a loading spinner and parse cats in a background QThread.
+
+        Call this right after show() when opening the window for the first time.
+        The window appears immediately; the cat list is populated once parsing is done.
+        """
+        self._is_loading = True
+        self._rebuild_list()   # shows the spinner right away
+
+        self._loader_thread = _CatLoaderThread(ctrl, parent=self)
+        self._loader_thread.finished.connect(self._on_loading_done)
+        self._loader_thread.error.connect(self._on_loading_error)
+        self._loader_thread.start()
+
+    def _on_loading_done(self):
+        """Called on the main thread once ctrl.load_cats_data() has finished."""
+        self._is_loading = False
+        if self._loader_thread is not None:
+            self._loader_thread.deleteLater()
+            self._loader_thread = None
+        ctrl = self._ctrl
+        if ctrl is not None:
+            self._cats = ctrl.cats
+            self._query_bar.set_cats(self._cats)
+        self._rebuild_list()
+
+    def _on_loading_error(self, msg: str):
+        """Called on the main thread if ctrl.load_cats_data() raised an exception."""
+        self._is_loading = False
+        if self._loader_thread is not None:
+            self._loader_thread.deleteLater()
+            self._loader_thread = None
+        QMessageBox.critical(self, "Cat Loading Error",
+                             f"Failed to load cat data:\n{msg}")
+        self._rebuild_list()
+

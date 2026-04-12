@@ -1244,17 +1244,21 @@ class MainWindow(QMainWindow):
 
     def _open_cat_manager(self):
         from ui.cat_manager import CatManagerWindow
-        # Load cats on demand — this is intentionally deferred from startup.
-        self.ctrl.load_cats_data()
         if not hasattr(self, "_cat_manager_win") or self._cat_manager_win is None:
-            self._cat_manager_win = CatManagerWindow(self.ctrl.cats, ctrl=self.ctrl, parent=None)
+            # Create and show the window immediately — cats are loaded in a background
+            # thread via start_loading() so the window appears without any blocking delay.
+            self._cat_manager_win = CatManagerWindow([], ctrl=self.ctrl, parent=None)
             self._cat_manager_win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             self._cat_manager_win.destroyed.connect(lambda: setattr(self, "_cat_manager_win", None))
+            self._cat_manager_win.show()
+            self._cat_manager_win.raise_()
+            self._cat_manager_win.activateWindow()
+            # Parse cats off the main thread; window shows a spinner until done.
+            self._cat_manager_win.start_loading(self.ctrl)
         else:
-            self._cat_manager_win.refresh(self.ctrl.cats)
-        self._cat_manager_win.show()
-        self._cat_manager_win.raise_()
-        self._cat_manager_win.activateWindow()
+            self._cat_manager_win.show()
+            self._cat_manager_win.raise_()
+            self._cat_manager_win.activateWindow()
 
     # ------------------------------------------------------------------
     # Save-change guard (UI dialog only)
