@@ -42,3 +42,4 @@ installer.iss
 *.iss
 .env
 .keep
+CLAUDE.MD
