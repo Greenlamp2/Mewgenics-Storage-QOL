@@ -689,13 +689,21 @@ class Cat:
 
         target_start, target_end, _ = eq_slots[target_idx]
         buf = bytearray(raw)
+        is_last_slot = (target_idx == len(eq_slots) - 1)
 
-        # Always replace the slot with EMPTY_MARKER regardless of position.
-        # Removing bytes for the last slot and setting a following byte to 0
-        # risks corrupting data that comes after the equipment section in the blob.
-        buf = buf[:target_start] + bytearray(self._EMPTY_MARKER) + buf[target_end:]
-        shift_pivot = target_start
-        net_shift   = (target_end - target_start) - len(self._EMPTY_MARKER)
+        if not is_last_slot:
+            # Slots 0–(N-2): replace with EMPTY_MARKER (same size approach from TS)
+            buf = buf[:target_start] + bytearray(self._EMPTY_MARKER) + buf[target_end:]
+            shift_pivot = target_start
+            net_shift   = (target_end - target_start) - len(self._EMPTY_MARKER)
+        else:
+            # Last slot: remove bytes entirely, then set byte at target_start to 0
+            # (mirrors TS: concatBytes(before, after) then out[slot.start] = 0)
+            buf = buf[:target_start] + buf[target_end:]
+            if target_start < len(buf):
+                buf[target_start] = 0
+            shift_pivot = target_start
+            net_shift   = target_end - target_start
 
         self._raw = bytes(buf)
 
