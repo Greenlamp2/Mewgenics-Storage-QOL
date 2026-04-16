@@ -596,28 +596,6 @@ class AppController:
             self._refresh_mtime()
         return modified, len(targets)
 
-    # ------------------------------------------------------------------
-    # Equipment item removal
-    # ------------------------------------------------------------------
-
-    def apply_remove_equipment_item(self, cat, item_name: str) -> bool:
-        """Replace *item_name* in *cat*'s equipment blob with 'None' and persist.
-
-        Returns True if the item was found and the save was updated.
-        """
-        import sqlite3
-        if not cat.remove_equipment_item_from_blob(item_name):
-            return False
-        new_blob = cat.to_blob()
-        conn = sqlite3.connect(self.sav_path)
-        try:
-            conn.execute("UPDATE cats SET data=? WHERE key=?", (new_blob, cat.db_key))
-            conn.commit()
-        finally:
-            conn.close()
-        self._refresh_mtime()
-        return True
-
     def apply_send_cats_multiple(self, cats: list) -> int:
         """Send multiple cats as gifts in one batch. Returns count sent."""
         from utils.gift_manager import send_cat as _send_cat, get_steam_id_from_path, get_recipient_id

@@ -258,33 +258,28 @@ class Cat:
             self.disorders = disorders
 
             # ── Equipment inventory (embedded after disorder data) ────────────
-            # Each slot is one of:
-            #   Filled: [u8=1][u64 len][ASCII name][24-byte meta][SLOT_BOUNDARY]
-            #   Empty:  [u8=0][u32=5]   (5 bytes total — EMPTY_MARKER)
-            # 24-byte meta = [u64(0) subname][i32 dur][u32 mods][u32 unk][u32 max_dur]
-            # SLOT_BOUNDARY = [0xFF][0x00][0x05 0x00 0x00 0x00]  (6 bytes)
+            # Format: u32 count, then items identical to inventory_storage
+            # but WITHOUT a leading version u32.
+            # Slots include all equipped items (weapons, armour, face, parasites…).
+            # "None" placeholders are filtered out by _valid_str.
             self.equipment: list[str] = []
             try:
                 eq_count = r.u32()
-                if 1 <= eq_count <= 10:
-                    for _eq_i in range(eq_count):
-                        flag = r.u8()
-                        if flag == 0x01:
-                            eq_name = r.str() or ""
-                            r.str()    # subname (u64=0, 8 bytes)
-                            r.i32()    # durability
-                            r.u32()    # modifier count
-                            r.u32()    # unknown
-                            r.u32()    # max durability
-                            r.u8()     # SLOT_BOUNDARY byte 1 (0xFF)
-                            r.u8()     # SLOT_BOUNDARY byte 2 (0x00)
-                            r.u32()    # SLOT_BOUNDARY bytes 3-6 (0x05000000)
-                            if eq_name and _valid_str(eq_name):
-                                self.equipment.append(eq_name)
-                        elif flag == 0x00:
-                            r.u32()    # EMPTY_MARKER tail (0x05000000)
-                        else:
-                            break      # unknown flag — stop gracefully
+                if 1 <= eq_count <= 10:  # sanity check
+                    for eq_i in range(eq_count):
+                        r.skip(1)       # flag byte (always 1)
+                        eq_name = r.str() or ""
+                        r.str()         # subname (discard)
+                        r.i32()         # charges
+                        r.u32()         # field1
+                        r.u32()         # field2
+                        r.u32()         # seqId
+                        r.u8()          # tailByte
+                        r.u8()          # sep_flag
+                        if eq_i < eq_count - 1:
+                            r.u32()     # version separator between items
+                        if eq_name and _valid_str(eq_name):
+                            self.equipment.append(eq_name)
                 else:
                     self.equipment = []
             except Exception:
@@ -578,148 +573,6 @@ class Cat:
             return True
 
         return False
-
-    # ── Equipment item removal ────────────────────────────────────────────
-
-    # Port of TypeScript patchDeleteEquipmentSlot:
-    #   Slots 0-3: replace slot bytes with EMPTY_MARKER [0x00, 0x05, 0x00, 0x00, 0x00]
-    #   Slot 4:    remove bytes + set the byte at slot.start to 0
-    # The count u32 is NEVER changed — the game always expects exactly N slots.
-    _EMPTY_MARKER   = bytes([0x00, 0x05, 0x00, 0x00, 0x00])      # 5 bytes
-    _SLOT_BOUNDARY  = bytes([0xFF, 0x00, 0x05, 0x00, 0x00, 0x00]) # 6 bytes
-
-    def remove_equipment_item_from_blob(self, item_name: str) -> bool:
-        """Replace *item_name*'s slot with an empty-slot marker (EMPTY_MARKER).
-
-        Mirrors TypeScript ``patchDeleteEquipmentSlot``:
-        - The slot bytes are replaced with ``[0x00, 0x05, 0x00, 0x00, 0x00]``.
-        - The count u32 is left unchanged (game expects fixed slot count).
-        - Slot 4 (last slot) receives special treatment: its bytes are
-          removed entirely and the byte at its former position is set to 0,
-          matching the TypeScript implementation.
-
-        Returns True if the item was found and the blob was patched.
-        """
-        raw = self._raw
-
-        # ── Re-locate DefaultMove ────────────────────────────────────────────
-        scan_start = self._pos_stat_sec + 7 * 4
-        run_start = -1
-        for i in range(scan_start, len(raw) - 19):
-            lo = struct.unpack_from('<I', raw, i)[0]
-            hi = struct.unpack_from('<I', raw, i + 4)[0]
-            if hi != 0 or not (1 <= lo <= 96):
-                continue
-            try:
-                cand = raw[i + 8: i + 8 + lo].decode('ascii')
-                if cand == 'DefaultMove':
-                    run_start = i
-                    break
-            except Exception:
-                continue
-
-        if run_start == -1:
-            return False
-
-        # ── Skip ability run ─────────────────────────────────────────────────
-        r = BinaryReader(raw)
-        r.seek(run_start)
-        for _ in range(32):
-            saved = r.pos
-            item = r.str()
-            if item is None or not _IDENT_RE.match(item):
-                r.seek(saved)
-                break
-
-        # Skip passive1 tier then 3 tail entries [str][u32]
-        try:
-            r.u32()
-        except Exception:
-            return False
-        for _ in range(3):
-            try:
-                r.str()
-                r.u32()
-            except Exception:
-                break
-
-        # ── Parse equipment slots, recording byte ranges ─────────────────────
-        # Skip the count u32 (we do NOT change it)
-        count_pos = r.pos
-        try:
-            eq_count = r.u32()
-            if not (1 <= eq_count <= 10):
-                return False
-        except Exception:
-            return False
-
-        # eq_slots: [(slot_start, slot_end, name_or_None)]
-        # For filled slots, slot_end is right after SLOT_BOUNDARY (6 bytes).
-        # For empty slots, slot_end is right after the 5-byte EMPTY_MARKER.
-        eq_slots: list[tuple[int, int, str | None]] = []
-        for _slot_i in range(eq_count):
-            slot_start = r.pos
-            try:
-                flag = r.u8()
-                if flag == 0x01:
-                    eq_name = r.str() or ""
-                    r.str()    # subname
-                    r.i32()    # durability
-                    r.u32()    # modifier count
-                    r.u32()    # unknown
-                    r.u32()    # max durability
-                    r.u8()     # SLOT_BOUNDARY[0]: 0xFF
-                    r.u8()     # SLOT_BOUNDARY[1]: 0x00
-                    r.u32()    # SLOT_BOUNDARY[2-5]: 0x05000000
-                    eq_slots.append((slot_start, r.pos, eq_name))
-                elif flag == 0x00:
-                    r.u32()    # EMPTY_MARKER tail: 0x05000000
-                    eq_slots.append((slot_start, r.pos, None))
-                else:
-                    break
-            except Exception:
-                break
-
-        # ── Find target slot ─────────────────────────────────────────────────
-        target_idx = next(
-            (i for i, (_, _, n) in enumerate(eq_slots) if n == item_name), None
-        )
-        if target_idx is None:
-            return False
-
-        target_start, target_end, _ = eq_slots[target_idx]
-        buf = bytearray(raw)
-        is_last_slot = (target_idx == len(eq_slots) - 1)
-
-        if not is_last_slot:
-            # Slots 0–(N-2): replace with EMPTY_MARKER (same size approach from TS)
-            buf = buf[:target_start] + bytearray(self._EMPTY_MARKER) + buf[target_end:]
-            shift_pivot = target_start
-            net_shift   = (target_end - target_start) - len(self._EMPTY_MARKER)
-        else:
-            # Last slot: remove bytes entirely, then set byte at target_start to 0
-            # (mirrors TS: concatBytes(before, after) then out[slot.start] = 0)
-            buf = buf[:target_start] + buf[target_end:]
-            if target_start < len(buf):
-                buf[target_start] = 0
-            shift_pivot = target_start
-            net_shift   = target_end - target_start
-
-        self._raw = bytes(buf)
-
-        # Adjust creation_day offset if it falls after the modified region
-        if net_shift and self._pos_creation_day is not None \
-                and self._pos_creation_day > shift_pivot:
-            self._pos_creation_day -= net_shift
-
-        # Update in-memory list
-        try:
-            self.equipment.remove(item_name)
-        except ValueError:
-            pass
-
-        return True
-
 
     # ── Rename ───────────────────────────────────────────────────────────────
 
