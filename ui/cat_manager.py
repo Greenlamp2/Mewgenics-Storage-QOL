@@ -593,6 +593,98 @@ class _CatCard(QFrame):
         p.end()
 
 
+
+# ------------------------------------------------------------------
+# Snapshot card (used in the 📸 Snapshots tab)
+# ------------------------------------------------------------------
+
+class _SnapshotCard(QFrame):
+    """Compact card representing a saved cat snapshot."""
+    selected = Signal(object)   # emits snapshot dict
+
+    def __init__(self, snapshot: dict, parent=None):
+        super().__init__(parent)
+        self._snapshot = snapshot
+
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setMinimumHeight(54)
+        self.setStyleSheet(
+            "QFrame { background: #191919; border: 1px solid #2a2a2a; border-radius: 6px; }"
+            "QFrame:hover { border-color: #5588aa; background: #1e2530; }"
+        )
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 6, 10, 6)
+        lay.setSpacing(8)
+
+        # Gender symbol
+        gender = snapshot.get("gender", "?")
+        g_sym  = _GENDER_SYMBOL.get(gender, "⚥")
+        g_col  = _GENDER_COLOR.get(gender, "#aaa")
+        g_lbl  = QLabel(g_sym)
+        g_lbl.setStyleSheet(
+            f"color: {g_col}; font-size: 14px; font-weight: bold;"
+            " background: transparent; border: none;"
+        )
+        g_lbl.setFixedWidth(16)
+        lay.addWidget(g_lbl)
+
+        # Name + label column
+        cat_name  = snapshot.get("cat_name", "?")
+        label_txt = snapshot.get("label", "")
+        suffix    = f"  <span style='color:#888;font-size:10px;'>({label_txt})</span>" if label_txt else ""
+        name_lbl  = QLabel(f"<b>{cat_name}</b>{suffix}")
+        name_lbl.setStyleSheet(
+            "color: #e0e0e0; font-size: 12px; background: transparent; border: none;"
+        )
+
+        saved_at = snapshot.get("saved_at", "")[:10]
+        date_lbl = QLabel(saved_at)
+        date_lbl.setStyleSheet(
+            "color: #666; font-size: 10px; background: transparent; border: none;"
+        )
+
+        name_col = QVBoxLayout()
+        name_col.setContentsMargins(0, 0, 0, 0)
+        name_col.setSpacing(1)
+        name_col.addWidget(name_lbl)
+        name_col.addWidget(date_lbl)
+        lay.addLayout(name_col, 1)
+
+        # Badges
+        mc = snapshot.get("mutations_count", 0)
+        dc = snapshot.get("defects_count", 0)
+        if mc:
+            b = QLabel(f"🧬 {mc}")
+            b.setStyleSheet(
+                "color: #6699ff; font-size: 10px; background: transparent; border: none;"
+            )
+            lay.addWidget(b)
+        if dc:
+            b = QLabel(f"⚡ {dc}")
+            b.setStyleSheet(
+                "color: #ffaa33; font-size: 10px; background: transparent; border: none;"
+            )
+            lay.addWidget(b)
+
+    def set_active(self, v: bool):
+        if v:
+            self.setStyleSheet(
+                "QFrame { background: #1c2a3a; border: 1px solid #5588aa; border-radius: 6px; }"
+            )
+        else:
+            self.setStyleSheet(
+                "QFrame { background: #191919; border: 1px solid #2a2a2a; border-radius: 6px; }"
+                "QFrame:hover { border-color: #5588aa; background: #1e2530; }"
+            )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.selected.emit(self._snapshot)
+        super().mousePressEvent(event)
+
+
 # ------------------------------------------------------------------
 # Detail panel
 # ------------------------------------------------------------------
@@ -614,6 +706,12 @@ class _CatDetail(QScrollArea):
     disorder_removed = Signal(object)   # emits Cat
     # Emitted after cat tags are modified
     tagged  = Signal(object)   # emits Cat
+    # Emitted after a snapshot is saved
+    snapshot_saved   = Signal()
+    # Emitted after a snapshot is deleted (carries snapshot id)
+    snapshot_deleted = Signal(str)
+    # Emitted after a cat clone is placed in house (carries new Cat)
+    snapshot_cloned  = Signal(object)
 
     def __init__(self, ctrl=None, parent=None):
         super().__init__(parent)
@@ -709,6 +807,12 @@ class _CatDetail(QScrollArea):
                 send_btn = _action_btn("🎁 Gift", "#aa5555", "#2a1a1a", "#dd8888")
                 send_btn.clicked.connect(lambda: self._do_send_cat(cat))
                 act_row.addWidget(send_btn)
+
+            # ── Snapshot ─────────────────────────────────────────────
+            if cat.status in ("In House", "In Bank"):
+                snap_btn = _action_btn("📸 Snapshot", "#335577", "#0a1a2a", "#88aabb")
+                snap_btn.clicked.connect(lambda _=False, _cat=cat: self._do_save_snapshot(_cat))
+                act_row.addWidget(snap_btn)
 
             # ── Newborn-only actions ─────────────────────────────────
             if getattr(cat, "age", None) == 1:
@@ -1222,6 +1326,191 @@ class _CatDetail(QScrollArea):
             grid.addWidget(val_lbl, 1, col)
 
         return w
+
+
+    # ── Snapshot actions ─────────────────────────────────────────────
+
+    def _do_save_snapshot(self, cat) -> None:
+        """Ask for a label, then save a snapshot of *cat*."""
+        if self._ctrl is None:
+            return
+        label, ok = QInputDialog.getText(
+            self, "📸 Save Snapshot",
+            f"Save snapshot of <b>{cat.name}</b>.<br>Optional label:",
+        )
+        if not ok:
+            return
+        try:
+            self._ctrl.apply_save_cat_snapshot(cat, label)
+        except Exception as exc:
+            QMessageBox.critical(self, "Snapshot Failed", str(exc))
+            return
+        self.snapshot_saved.emit()
+
+    def show_snapshot(self, snapshot: dict, ctrl=None) -> None:
+        """Display a snapshot's info with Clone and Delete controls."""
+        if ctrl is not None:
+            self._ctrl = ctrl
+        self._current_cat = None
+
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Header
+        cat_name  = snapshot.get("cat_name", "?")
+        label_txt = snapshot.get("label", "")
+        saved_at  = snapshot.get("saved_at", "")
+
+        title = QLabel(f"📸  {cat_name}")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            "color: #88aabb; font-size: 18px; font-weight: bold; background: transparent;"
+        )
+        self._layout.addWidget(title)
+
+        if label_txt:
+            lbl_lbl = QLabel(f'"{label_txt}"')
+            lbl_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_lbl.setStyleSheet("color: #888; font-size: 12px; background: transparent;")
+            self._layout.addWidget(lbl_lbl)
+
+        if saved_at:
+            dt_lbl = QLabel(f"Saved: {saved_at[:19].replace('T', '  ')}")
+            dt_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            dt_lbl.setStyleSheet("color: #666; font-size: 11px; background: transparent;")
+            self._layout.addWidget(dt_lbl)
+
+        # Action buttons
+        def _snap_btn(label, border, bg, fg):
+            b = QPushButton(label)
+            b.setStyleSheet(
+                f"QPushButton {{ font-size: 11px; padding: 4px 14px;"
+                f" border: 1px solid {border}; border-radius: 4px;"
+                f" background: {bg}; color: {fg}; }}"
+                f"QPushButton:hover {{ background: {bg}; color: #fff; border-color: {fg}; }}"
+                f"QPushButton:pressed {{ background: {border}44; }}"
+            )
+            return b
+
+        btn_row = QHBoxLayout()
+        btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_row.setSpacing(8)
+
+        clone_btn = _snap_btn("🐱 Clone to House", "#4caf50", "#0a1e0e", "#4caf50")
+        clone_btn.clicked.connect(lambda _=False, s=snapshot: self._do_clone_snapshot(s))
+        btn_row.addWidget(clone_btn)
+
+        del_btn = _snap_btn("🗑 Delete Snapshot", "#992222", "#1e0808", "#cc4444")
+        del_btn.clicked.connect(lambda _=False, s=snapshot: self._do_delete_snapshot(s))
+        btn_row.addWidget(del_btn)
+
+        btn_row_w = QWidget()
+        btn_row_w.setStyleSheet("background: transparent;")
+        btn_row_w.setLayout(btn_row)
+        self._layout.addWidget(btn_row_w)
+
+        # Stats
+        stats = snapshot.get("stats", {})
+        if stats:
+            self._layout.addWidget(_section_label("Stats"))
+            stats_w = QWidget()
+            stats_w.setStyleSheet("background: transparent;")
+            stats_grid = QGridLayout(stats_w)
+            stats_grid.setContentsMargins(0, 0, 0, 0)
+            stats_grid.setSpacing(6)
+            for col, stat in enumerate(STAT_NAMES):
+                val = stats.get(stat, 0)
+                color = STAT_DISPLAY_COLORS.get(stat, "#ccc")
+                n_lbl = QLabel(stat)
+                n_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                n_lbl.setStyleSheet(
+                    f"color: {color}; font-size: 10px; font-weight: bold; background: transparent;"
+                )
+                v_lbl = QLabel(str(val))
+                v_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                v_lbl.setStyleSheet(
+                    f"color: {color}; font-size: 13px; font-weight: bold; background: transparent;"
+                )
+                stats_grid.addWidget(n_lbl, 0, col)
+                stats_grid.addWidget(v_lbl, 1, col)
+            self._layout.addWidget(stats_w)
+
+        # Abilities
+        abilities = snapshot.get("abilities", [])
+        if abilities:
+            self._layout.addWidget(_section_label("Abilities"))
+            self._layout.addWidget(_ability_list(abilities, "#0e1a0e", "#88cc88"))
+
+        # Counts row
+        mc = snapshot.get("mutations_count", 0)
+        dc = snapshot.get("defects_count", 0)
+        dis = snapshot.get("disorders_count", 0)
+        self._layout.addWidget(
+            _info_row("Mutations:", str(mc), "#6699ff")
+        )
+        self._layout.addWidget(
+            _info_row("Defects:", str(dc), "#ffaa33")
+        )
+        if dis:
+            self._layout.addWidget(
+                _info_row("Disorders:", str(dis), "#ff7777")
+            )
+
+        self._layout.addStretch()
+
+    def _do_clone_snapshot(self, snapshot: dict) -> None:
+        """Pick a room and clone *snapshot* into the house."""
+        if self._ctrl is None:
+            return
+        rooms = self._ctrl.get_available_rooms()
+        if not rooms:
+            QMessageBox.information(
+                self, "No Rooms",
+                "No rooms found in the current house state.\nLoad the Cat Manager first."
+            )
+            return
+        display_names = [_room_display(r) for r in rooms]
+        dlg = QInputDialog(self)
+        dlg.setWindowTitle("🐱 Clone to House")
+        dlg.setLabelText(
+            f"Choose destination room for the clone of <b>{snapshot.get('cat_name', '?')}</b>:"
+        )
+        dlg.setComboBoxItems(display_names)
+        dlg.setComboBoxEditable(False)
+        dlg.setMinimumWidth(380)
+        ok = dlg.exec()
+        display = dlg.textValue()
+        if not ok or not display:
+            return
+        room = rooms[display_names.index(display)] if display in display_names else display
+        try:
+            new_cat = self._ctrl.apply_clone_cat_to_house(snapshot, room)
+        except Exception as exc:
+            QMessageBox.critical(self, "Clone Failed", f"Could not clone cat:\n{exc}")
+            return
+        QMessageBox.information(
+            self, "Clone Success",
+            f"<b>{new_cat.name}</b> cloned into <b>{_room_display(room)}</b>."
+        )
+        self.snapshot_cloned.emit(new_cat)
+
+    def _do_delete_snapshot(self, snapshot: dict) -> None:
+        """Delete *snapshot* after confirmation."""
+        cat_name = snapshot.get("cat_name", "?")
+        reply = QMessageBox.question(
+            self, "🗑 Delete Snapshot",
+            f"<b>Delete snapshot of {cat_name}?</b><br>"
+            f"The original cat is not affected.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        if self._ctrl is None:
+            return
+        self._ctrl.apply_delete_cat_snapshot(snapshot.get("id", ""))
+        self.snapshot_deleted.emit(snapshot.get("id", ""))
 
 
 # ------------------------------------------------------------------
@@ -1921,13 +2210,26 @@ class CatManagerWindow(QWidget):
         self._filter_btn_active_style = _btn_style_active
         self._filter_btn_normal_style = _btn_style
 
-        # Only "In House", "Adventure", "In Bank" and "Newborns" — no "All"
+        # Only "In House", "Adventure", "In Bank", "Newborns" and "Snapshots"
+        _snap_active = (
+            "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #5588aa;"
+            " border-radius: 4px; background: #0a1a2a; color: #88aabb; font-weight: bold; }"
+        )
+        _snap_normal = (
+            "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #444;"
+            " border-radius: 4px; background: #1e1e1e; color: #aaa; }"
+            "QPushButton:hover { background: #161e28; color: #88aabb; }"
+        )
         for key, label in [("house", "🏠 In House"), ("adventure", "⚔️ Adventure"),
-                            ("bank", "🏦 In Bank"), ("newborns", "🍼 Newborns")]:
+                            ("bank", "🏦 In Bank"), ("newborns", "🍼 Newborns"),
+                            ("snapshots", "📸 Snapshots")]:
             btn = QPushButton(label)
             if key == "newborns":
                 btn.setStyleSheet(_newborn_active if key == self._filter else _newborn_normal)
                 btn.setProperty("newborn_btn", True)
+            elif key == "snapshots":
+                btn.setStyleSheet(_snap_active if key == self._filter else _snap_normal)
+                btn.setProperty("snap_btn", True)
             else:
                 btn.setStyleSheet(_btn_style_active if key == self._filter else _btn_style)
             btn.clicked.connect(lambda _=False, k=key: self._set_filter(k))
@@ -2037,6 +2339,10 @@ class CatManagerWindow(QWidget):
         self._detail.deleted.connect(self._on_cat_deleted)
         self._detail.disorder_removed.connect(self._on_cat_disorder_removed)
         self._detail.tagged.connect(self._on_cat_tagged)
+        self._detail.snapshot_saved.connect(self._on_snapshot_saved)
+        self._detail.snapshot_deleted.connect(self._on_snapshot_deleted)
+        self._detail.snapshot_cloned.connect(self._on_snapshot_cloned)
+        self._active_snap_card: _SnapshotCard | None = None
 
         # ── Multi-select action bar (hidden until cats are selected) ─
         self._ms_bar = QWidget()
@@ -2137,6 +2443,17 @@ class CatManagerWindow(QWidget):
         for k, btn in self._filter_btns.items():
             if k == "newborns":
                 btn.setStyleSheet(_newborn_active if k == key else _newborn_normal)
+            elif k == "snapshots":
+                _snap_active = (
+                    "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #5588aa;"
+                    " border-radius: 4px; background: #0a1a2a; color: #88aabb; font-weight: bold; }"
+                )
+                _snap_normal = (
+                    "QPushButton { font-size: 12px; padding: 3px 12px; border: 1px solid #444;"
+                    " border-radius: 4px; background: #1e1e1e; color: #aaa; }"
+                    "QPushButton:hover { background: #161e28; color: #88aabb; }"
+                )
+                btn.setStyleSheet(_snap_active if k == key else _snap_normal)
             else:
                 btn.setStyleSheet(
                     self._filter_btn_active_style if k == key
@@ -2249,7 +2566,26 @@ class CatManagerWindow(QWidget):
                 if item.widget():
                     item.widget().deleteLater()
 
-            self._active_card = None
+            self._active_card      = None
+            self._active_snap_card = None
+
+            # ── Snapshots tab ─────────────────────────────────────────
+            if self._filter == "snapshots":
+                snapshots = getattr(self._ctrl, "cat_snapshots", []) if self._ctrl else []
+                self._count_lbl.setText(f"{len(snapshots)} snapshot(s)")
+                if not snapshots:
+                    empty = QLabel("No snapshots saved yet.\nUse the 📸 Snapshot button on any cat.")
+                    empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    empty.setStyleSheet("color: #555; font-size: 13px; padding: 30px;")
+                    self._list_layout.addWidget(empty)
+                else:
+                    for snap in reversed(snapshots):  # newest first
+                        card = _SnapshotCard(snap)
+                        card.selected.connect(self._on_snapshot_selected)
+                        self._list_layout.addWidget(card)
+                self._list_layout.addStretch()
+                self._refresh_ms_bar()
+                return
 
             # ── Loading state ─────────────────────────────────────────
             if self._is_loading:
@@ -2771,6 +3107,35 @@ class CatManagerWindow(QWidget):
         self._rebuild_list()
         self._rebuild_bank_tag_bar()
         self._reselect_cat(cat)
+
+    # ── Snapshot handlers ─────────────────────────────────────────────
+
+    def _on_snapshot_selected(self, snapshot: dict):
+        if self._active_snap_card is not None:
+            self._active_snap_card.set_active(False)
+        # Find and activate the clicked card
+        for i in range(self._list_layout.count()):
+            w = self._list_layout.itemAt(i)
+            if w and w.widget() and isinstance(w.widget(), _SnapshotCard):
+                card: _SnapshotCard = w.widget()
+                if card._snapshot.get("id") == snapshot.get("id"):
+                    card.set_active(True)
+                    self._active_snap_card = card
+                    break
+        self._detail.show_snapshot(snapshot, self._ctrl)
+
+    def _on_snapshot_saved(self):
+        """Called after a snapshot is saved — refresh count if on snapshots tab."""
+        if self._filter == "snapshots":
+            self._rebuild_list()
+
+    def _on_snapshot_deleted(self, snapshot_id: str):
+        """Called after snapshot deleted — rebuild list."""
+        self._rebuild_list()
+
+    def _on_snapshot_cloned(self, new_cat):
+        """Called after a clone is placed in the house — switch to house tab."""
+        self._set_filter("house")
 
     def _refresh_kill_counter(self):
         """Update the kill counter label in the sub-filter bar."""

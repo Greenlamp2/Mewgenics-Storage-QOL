@@ -13,10 +13,12 @@ from catalogs.itemcatalog import item_catalog
 from utils.loaders import load_inventories, load_gold, load_tokens, load_items_pool, \
     load_save_properties, load_cats_count, load_bank_inventory, load_bank_folders, SAVE_INFO_KEYS, \
     load_house_state_raw, load_adventure_keys, load_cats, load_pedigree, \
-    load_current_day, load_cat_bank, load_newborn_kills, load_cat_tags, load_jack_level
+    load_current_day, load_cat_bank, load_newborn_kills, load_cat_tags, load_jack_level, \
+    load_cat_snapshots
 from utils.savers import save_inventories as _save_inventories, save_tokens, \
     save_bank_inventory, save_items_pool, save_bank_folders, save_house_state, \
-    save_cat_bank, save_new_cat, save_newborn_kills, save_gold as _save_gold, save_cat_tags
+    save_cat_bank, save_new_cat, save_newborn_kills, save_gold as _save_gold, save_cat_tags, \
+    save_cat_snapshots as _save_cat_snapshots
 
 # Rarities that should never appear in any view
 EXCLUDED_RARITIES = {"sidequest", "quest"}
@@ -52,6 +54,8 @@ class AppController:
         self.cat_bank: dict = {}
         # Cat tags (maps db_key → [list of tag strings]), persisted in custom table
         self.cat_tags: dict[int, list[str]] = {}
+        # Cat snapshots — list of snapshot dicts persisted in custom table
+        self.cat_snapshots: list = []
         # house_state round-trip helpers (set by load_data / apply_bank_cat / apply_unbank_cat)
         self._house_state_prefix:  bytes = b'\x00\x00\x00\x00'
         self._house_state_entries: dict  = {}  # {cat_key: raw_entry_bytes} currently in house_state
@@ -148,6 +152,7 @@ class AppController:
         current_day             = load_current_day(self.sav_path)
         self.newborn_kill_count = load_newborn_kills(self.sav_path)
         self.cat_tags           = load_cat_tags(self.sav_path)
+        self.cat_snapshots      = load_cat_snapshots(self.sav_path)
 
         cats: list = []
         for key, blob in raw_cats:
@@ -768,8 +773,84 @@ class AppController:
             self._refresh_mtime()
         return modified
 
+    # ------------------------------------------------------------------
+    # Cat snapshots
+    # ------------------------------------------------------------------
+
+    def apply_save_cat_snapshot(self, cat, label: str = "") -> dict:
+        """Save a snapshot of *cat*'s current blob. Returns the snapshot dict."""
+        import base64
+        import uuid
+        import datetime as _dt
+        from catalogs.stat_catalog import STAT_NAMES
+
+        blob = cat.to_blob()
+        snapshot = {
+            "id":              str(uuid.uuid4())[:8],
+            "label":           label.strip(),
+            "cat_name":        cat.name or "",
+            "blob_b64":        base64.b64encode(blob).decode(),
+            "saved_at":        _dt.datetime.now().isoformat(timespec="seconds"),
+            "gender":          cat.gender,
+            "mutations_count": len(getattr(cat, "mutation_chip_items", [])),
+            "defects_count":   len(getattr(cat, "defect_chip_items", [])),
+            "disorders_count": len(getattr(cat, "disorders", [])),
+            "stats":           {s: getattr(cat, "base_stats", {}).get(s, 0) for s in STAT_NAMES},
+            "abilities":       list(getattr(cat, "abilities", []))[:5],
+        }
+        self.cat_snapshots.append(snapshot)
+        _save_cat_snapshots(self.sav_path, self.cat_snapshots)
+        return snapshot
+
+    def apply_delete_cat_snapshot(self, snapshot_id: str) -> bool:
+        """Remove snapshot by id. Returns True if found and deleted."""
+        orig = len(self.cat_snapshots)
+        self.cat_snapshots = [s for s in self.cat_snapshots if s.get("id") != snapshot_id]
+        if len(self.cat_snapshots) < orig:
+            _save_cat_snapshots(self.sav_path, self.cat_snapshots)
+            return True
+        return False
+
+    def apply_clone_cat_to_house(self, snapshot: dict, room_name: str):
+        """Create a new cat from *snapshot* blob and place it In House.
+
+        Strips genealogy (zeros parents/lovers/inbredness), allocates a new
+        db_key, writes it to the cats table and house_state.
+        Returns the new Cat object (status = ``"In House"``).
+        """
+        import base64
+        import struct
+        from parse.cat import Cat
+
+        blob = base64.b64decode(snapshot["blob_b64"])
+        current_day = int(self.save_properties.get("current_day") or 0)
+
+        cat_tmp = Cat(blob, 0, {}, set(), current_day)
+        cat_tmp.strip_genealogy(current_day)
+        clean_blob = cat_tmp.to_blob()
+
+        new_key = save_new_cat(self.sav_path, clean_blob)
+
+        room_enc = room_name.encode("ascii", errors="replace")
+        entry_bytes = (
+            struct.pack("<II", new_key, 0)
+            + struct.pack("<II", len(room_enc), 0)
+            + room_enc
+            + b"\x00" * 24
+        )
+        self._house_state_entries[new_key] = entry_bytes
+        self._house_state_info[new_key]    = room_name
+        save_house_state(self.sav_path, self._house_state_prefix, self._house_state_entries)
+
+        cat = Cat(clean_blob, new_key, {new_key: room_name}, set(), current_day)
+        cat.status = "In House"
+        cat.room   = room_name
+        cat.tags   = []
+        self.cats.append(cat)
+        self._refresh_mtime()
+        return cat
+
     def get_save_date_str(self) -> str:
-        """Return a human-readable last-modified timestamp for the save file."""
         try:
             mtime = os.path.getmtime(self.sav_path)
             dt    = datetime.datetime.fromtimestamp(mtime)
@@ -1446,5 +1527,4 @@ class AppController:
         save_tokens(self.sav_path, self.tokens)
         self._refresh_mtime()
         return True
-
 

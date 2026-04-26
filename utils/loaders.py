@@ -382,6 +382,29 @@ def load_cat_tags(path: str) -> dict:
     return {}
 
 
+CAT_SNAPSHOTS_KEY = "cat_snapshots_v1"
+
+
+def load_cat_snapshots(path: str) -> list:
+    """Load cat snapshots from the custom table. Returns list of snapshot dicts."""
+    if not os.path.exists(path):
+        return []
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE IF NOT EXISTS custom (key TEXT PRIMARY KEY, data TEXT)")
+        conn.commit()
+        row = conn.execute(
+            "SELECT data FROM custom WHERE key=?", (CAT_SNAPSHOTS_KEY,)
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            data = json.loads(row[0])
+            return data if isinstance(data, list) else []
+    except Exception:
+        pass
+    return []
+
+
 def load_bank_folders(sav_path: str) -> dict:
     """Load the bank folder structure from the SQLite custom table.
 

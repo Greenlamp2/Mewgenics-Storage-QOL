@@ -245,6 +245,21 @@ def save_cat_bank(path: str, cat_bank: dict) -> None:
     conn.close()
 
 
+_CAT_SNAPSHOTS_KEY = "cat_snapshots_v1"
+
+
+def save_cat_snapshots(path: str, snapshots: list) -> None:
+    """Persist cat snapshots to the custom table."""
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE IF NOT EXISTS custom (key TEXT PRIMARY KEY, data TEXT)")
+    conn.execute(
+        "INSERT OR REPLACE INTO custom (key, data) VALUES (?, ?)",
+        (_CAT_SNAPSHOTS_KEY, json.dumps(snapshots, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+
+
 _CAT_TAGS_KEY = "cat_tags_v1"
 
 def save_cat_tags(path: str, cat_tags: dict) -> None:
