@@ -31,6 +31,9 @@ POOL_NAME_BLACKLIST: frozenset = frozenset({
 # Token cost to purchase one item directly from the pool
 PURCHASE_COST: int = 2
 
+# Token cost to unlock (discover) a locked pool item without adding it to storage
+UNLOCK_COST: int = 5
+
 
 class AppController:
     """Owns app state; exposes query and command methods for the UI to call."""
@@ -1465,6 +1468,62 @@ class AppController:
     # ------------------------------------------------------------------
     # Pool purchase — buy an item directly from the pool with tokens
     # ------------------------------------------------------------------
+
+    def apply_unlock_pool_item(self, item) -> bool:
+        """Unlock (discover) a locked GhostItem in the pool for UNLOCK_COST tokens.
+
+        Does NOT add the item to storage — it just moves it from undiscovered to
+        discovered so it can be purchased normally afterwards.
+
+        Raises ``ValueError`` if item is not a GhostItem, rarity unknown, or not
+        enough tokens.  Returns ``True`` on success.
+        """
+        if not isinstance(item, GhostItem):
+            raise ValueError("Only undiscovered (locked) items can be unlocked.")
+        rarity = getattr(item, "rarity", None)
+        if not rarity or rarity not in self.tokens:
+            raise ValueError(
+                f"Cannot unlock: item has no valid rarity ({rarity!r})."
+            )
+        if self.tokens.get(rarity, 0) < UNLOCK_COST:
+            raise ValueError(
+                f"Not enough tokens: need {UNLOCK_COST} {rarity} tokens "
+                f"(you have {self.tokens.get(rarity, 0)})."
+            )
+
+        # Deduct cost
+        self.tokens[rarity] -= UNLOCK_COST
+
+        # Discover the item in the pool (without adding to storage)
+        if item.name not in self.items_pool and item.name not in POOL_NAME_BLACKLIST:
+            new_raw = {
+                "name":     item.name,
+                "subname":  "",
+                "charges":  -1,
+                "field1":   0,
+                "field2":   0,
+                "seqId":    0,
+                "tailByte": 0,
+                "sep_flag": 1,
+            }
+            self.items_pool[item.name] = new_raw
+            save_items_pool(self.items_pool)
+            self.pool_items = [Item(r) for r in self.items_pool.values()]
+            discovered_names = set(self.items_pool.keys())
+            all_catalog = item_catalog.get_all_non_quest_items()
+            self.undiscovered_pool_items = [
+                GhostItem(n, details)
+                for n, details in all_catalog.items()
+                if n not in discovered_names
+                and details is not None
+                and details.get("rarity") not in EXCLUDED_RARITIES
+                and details.get("rarity") is not None
+            ]
+            self.inv_items["Pool"] = self.pool_items + self.undiscovered_pool_items
+
+        save_tokens(self.sav_path, self.tokens)
+        self._refresh_mtime()
+        return True
 
     def apply_purchase_pool_item(self, item) -> bool:
         """Purchase *item* from the pool for PURCHASE_COST tokens of its rarity.
