@@ -368,6 +368,8 @@ class _CatCard(QFrame):
 
         # Badges: (text, fg, bg, border) — drawn right-to-left
         self._badges: list[tuple[str, str, str, str]] = []
+        if getattr(cat, "retired", False):
+            self._badges.append(("🎖", "#f0c040", "#221600", "#5a3a00"))
         if dis_count > 0:
             self._badges.append((f"⚠ {dis_count}", "#e05050", "#220e0e", "#5a1a1a"))
         if def_count > 0:
@@ -706,6 +708,8 @@ class _CatDetail(QScrollArea):
     disorder_removed = Signal(object)   # emits Cat
     # Emitted after cat tags are modified
     tagged  = Signal(object)   # emits Cat
+    # Emitted after cat is retired
+    retired_changed = Signal(object)   # emits Cat
     # Emitted after a snapshot is saved
     snapshot_saved   = Signal()
     # Emitted after a snapshot is deleted (carries snapshot id)
@@ -814,6 +818,12 @@ class _CatDetail(QScrollArea):
                 snap_btn.clicked.connect(lambda _=False, _cat=cat: self._do_save_snapshot(_cat))
                 act_row.addWidget(snap_btn)
 
+            # ── Retire ───────────────────────────────────────────────
+            if not getattr(cat, "retired", False):
+                retire_btn = _action_btn("🎖 Retire", "#5a3a00", "#221600", "#f0c040")
+                retire_btn.clicked.connect(lambda _=False, _cat=cat: self._do_retire(_cat))
+                act_row.addWidget(retire_btn)
+
             # ── Newborn-only actions ─────────────────────────────────
             if getattr(cat, "age", None) == 1:
                 if cat.status == "In House":
@@ -906,6 +916,15 @@ class _CatDetail(QScrollArea):
             age_lbl = QLabel(f"🕐 {cat.age}d")
             age_lbl.setStyleSheet("color: #aaa; font-size: 12px; background: transparent;")
             row2.addWidget(age_lbl)
+
+        if getattr(cat, "retired", False):
+            ret_lbl = QLabel("🎖 Retired")
+            ret_lbl.setStyleSheet(
+                "color: #f0c040; font-size: 12px; font-weight: bold;"
+                " background: #221600; border: 1px solid #5a3a00;"
+                " border-radius: 4px; padding: 1px 6px;"
+            )
+            row2.addWidget(ret_lbl)
 
         row2_w = QWidget()
         row2_w.setLayout(row2)
@@ -1047,6 +1066,25 @@ class _CatDetail(QScrollArea):
         self.show_cat(cat)
         # Signal the list to update the card label
         self.renamed.emit(cat)
+
+    def _do_retire(self, cat) -> None:
+        """Mark *cat* as retired (can no longer go on adventure)."""
+        reply = QMessageBox.question(
+            self,
+            "Retire Cat",
+            f"Mark <b>{cat.name}</b> as retired?<br><br>"
+            "A retired cat can no longer go on adventure. This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._ctrl.apply_retire_cat(cat)
+        except Exception as exc:
+            QMessageBox.critical(self, "Retire Failed", f"Could not retire the cat:\n{exc}")
+            return
+        self.show_cat(cat)
+        self.retired_changed.emit(cat)
 
     def _do_bank(self, cat) -> None:
         """Send *cat* to the cat bank."""
@@ -2342,6 +2380,7 @@ class CatManagerWindow(QWidget):
         self._detail.snapshot_saved.connect(self._on_snapshot_saved)
         self._detail.snapshot_deleted.connect(self._on_snapshot_deleted)
         self._detail.snapshot_cloned.connect(self._on_snapshot_cloned)
+        self._detail.retired_changed.connect(self._on_cat_retired)
         self._active_snap_card: _SnapshotCard | None = None
 
         # ── Multi-select action bar (hidden until cats are selected) ─
@@ -2904,6 +2943,11 @@ class CatManagerWindow(QWidget):
         # Re-sort the list now that the name changed
         self._rebuild_list()
         # Re-select the cat in the new sorted order
+        self._reselect_cat(cat)
+
+    def _on_cat_retired(self, cat):
+        """Called after a cat is retired: rebuild the card (badge update) and re-select."""
+        self._rebuild_list()
         self._reselect_cat(cat)
 
     def _on_cat_banked(self, cat):

@@ -81,6 +81,8 @@ class Cat:
         self._uid_int = r.u64()            # cat's own unique id (seed)
         self.unique_id = hex(self._uid_int)
         self.name = r.utf16str()
+        _name_end_raw = r.pos  # position right after UTF-16 name bytes (used for status flags)
+        self._name_end_raw = _name_end_raw  # kept for retire_in_blob()
 
         # Optional post-name tag string (empty for most cats). Some fields below
         # are anchored to the byte immediately after this string.
@@ -359,12 +361,40 @@ class Cat:
         self.parsed_age = self.age
         self.sexuality: str = "straight"  # bi / gay / straight — defaults to straight
 
+        # Status flags — u16 LE at (name_end_raw + 0x10).
+        # Bit 0x0002 = retired (went on adventure, can no longer go again).
+        # Port of JS readStatusFlags(dec, nameEndRaw).
+        _flags_off = _name_end_raw + 0x10
+        if _flags_off + 2 <= len(raw):
+            _status_flags = struct.unpack_from('<H', raw, _flags_off)[0]
+            self.retired: bool = bool(_status_flags & 0x0002)
+        else:
+            self.retired = False
+
         # Legacy token fallback is already handled above when sex_code is unavailable.
 
     def parse(self, path):
         pass
 
-    # ── Genealogy strip ──────────────────────────────────────────────────────
+    # ── Retire ───────────────────────────────────────────────────────────────
+
+    def retire_in_blob(self) -> None:
+        """Set the retired bit (0x0002) in status flags inside ``_raw``.
+
+        The flags field is a u16 LE at ``_name_end_raw + 0x10`` — port of JS
+        ``readStatusFlags(dec, nameEndRaw)``.  Call ``to_blob()`` + ``save_cat()``
+        after this to persist.
+        """
+        flags_off = self._name_end_raw + 0x10
+        buf = bytearray(self._raw)
+        if flags_off + 2 > len(buf):
+            return
+        current = struct.unpack_from('<H', buf, flags_off)[0]
+        struct.pack_into('<H', buf, flags_off, current | 0x0002)
+        self._raw = bytes(buf)
+        self.retired = True
+
+    # ── Genealogy strip ───────────────────────────────────────────────────────
 
     def strip_genealogy(self, current_day: int) -> None:
         """Zero-out all genealogy-related fields in the raw blob and reset

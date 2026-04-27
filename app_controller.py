@@ -253,6 +253,13 @@ class AppController:
         save_cat(self.sav_path, cat)
         self._refresh_mtime()
 
+    def apply_retire_cat(self, cat) -> None:
+        """Set the retired flag on *cat* and persist the blob."""
+        from utils.savers import save_cat
+        cat.retire_in_blob()
+        save_cat(self.sav_path, cat)
+        self._refresh_mtime()
+
     # ------------------------------------------------------------------
     # Cat bank — move cats between the house and the cat bank
     # ------------------------------------------------------------------
